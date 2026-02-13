@@ -66,11 +66,7 @@
 #define USBCON // Define USBCON to use Serial1 for Sabertooth on ESP32
 #endif
 
-#include "Wire.h"
 #include <USBSabertooth.h>
-#ifndef USE_WAVESHARE_ESP32_LCD
-    #include <avr/pgmspace.h>
-#endif
 
 /////
 // Setup the Comms
@@ -81,8 +77,10 @@ USBSabertooth       ST(C, 128);              // Use address 128.
 
 Stream* serialPort;
 
+#ifdef ENABLE_SERIAL_TRIGGER
+#include "Wire.h"
 #define I2CAdress 123 // Because 323 or 232 are not valid!
-
+#endif
 
 /////
 // Forward Declarations
@@ -390,45 +388,7 @@ void SetBacklightColor(int color)
     #endif
 }
 
-//TEMP TEMP TEMP
-
-
-const char* const PROGMEM COMMAND[31] = {
-// PSI Pro Command Set 1
- // For testing purposes, some timings have been shortened using the | time modifier.  Default times are noted below.
-"PSI PRO\0",         // Command Set Name (max length is 20 characters)
-"22",              // I2C address of PSI Pro (22 is default for PSI Pro front)
-"YES",             // Add carriage return to command (\r) YES/NO
-"0T1",             // CMD 1 - Mode 1  - Default Pattern
-"0T2",             // CMD 2 - Mode 2  - Flash (fast flash) (4 seconds) Use caution around those sensitive to flashing lights.
-"0T3",             // CMD 3 - Mode 3  - Alarm (slow flash) (4 seconds)
-"0T4",             // CMD 4 - Mode 4  - Short Circuit (10 seconds)
-"0T5",             // CMD 5 - Mode 5  - Scream (4 seconds)
-"0T6|10",          // CMD 6 - Mode 6  - Leia Message (10 seconds, default 34 seconds)
-"0T7",             // CMD 7 - Mode 7  - I Heart U (10 seconds)
-"0T8",             // CMD 8 - Mode 8  - Quarter Panel Sweep (7 seconds)
-"0T9",             // CMD 9 - Mode 9  - Flashing Red Heart (Front PSI), Pulse Monitor (Rear PSI)
-"0T10",            // CMD 10 - Mode 10 - Star Wars - Title Scroll (15 seconds)
-"0T11|10",         // CMD 11 - Mode 11 - Imperial March (10 seconds, default 47 seconds)
-"0T12",            // CMD 12 - Mode 12 - Disco Ball (4 seconds)
-"0T13",            // CMD 13 - Mode 13 - Disco Ball - Runs Indefinitely
-"0T14",            // CMD 14 - Mode 14 - Rebel Symbol (5 seconds)
-"0T15|10",         // CMD 15 - Mode 15 - Knight Rider (10 seconds, default 20 seconds)
-"0T16",            // CMD 16 - Mode 16 - Test Sequence (White on Indefinitely)
-"0T17",            // CMD 17 - Mode 17 - Red on Indefinitely
-"0T18",            // CMD 18 - Mode 18 - Green on Indefinitely
-"0T19",            // CMD 19 - Mode 19 - LightSaber Battle
-"0T20",            // CMD 20 - Mode 20 - Star Wars Intro (scrolling yellow "text" getting smaller and dimmer)
-"0T21",            // CMD 21 - Mode 21 - VU Meter (4 seconds)
-"0T92",            // CMD 22 - Mode 92 - VU Meter - Runs Indefinitely (Spectrum on Teeces)
-"0T0",             // CMD 23 - Mode 0  - Turn Panel off (This will also turn stop the Teeces if they share the serial connection and the "0" address is used)
-"3P200",           // CMD 24 - Sets PSI to Max Brightness (200), does not save to EEPROM
-"3P0",             // CMD 25 - Restores PSI Brightness to previous value
-"",                // CMD 26
-"",                // CMD 27
-"",                // CMD 28
-};
-
+#ifdef ENABLE_SERIAL_TRIGGER
 /*
 void sendCommand(uint8_t addr, char* command){
 
@@ -437,6 +397,7 @@ void sendCommand(uint8_t addr, char* command){
   Wire.endTransmission();
 }
 */
+#endif
 
 /*
    Setup
@@ -478,8 +439,10 @@ void setup()
     serialPort = &Serial;
 
     // Setup I2C
+    #ifdef ENABLE_SERIAL_TRIGGER
     Wire.begin(I2CAdress);                   // Start I2C Bus as Master I2C Address
     Wire.onReceive(receiveEvent);            // register event so when we receive something we jump to receiveEvent();
+    #endif
 
     // Init the display
     #ifdef USE_WAVESHARE_ESP32_LCD
@@ -614,7 +577,7 @@ void ReadRC()
    The Limit switches are expected to be installed in NO Mode (Normal Open) so that
    when the switch is depressed, the signal will be pulled LOW.
 
- */
+*/
 void ReadLimitSwitches()
 {
     TiltUp = digitalRead(TiltUpPin);
@@ -722,7 +685,7 @@ void ReadRollingCodeTrigger()
    The output can be helpful to verify the limit switch wiring and other inputs prior to installing
    the arduino in your droid.  For normal operation DEBUG_VERBOSE mode should be turned off.
 
- */
+*/
 void Display()
 {
     // We only output this if DEBUG_VERBOSE mode is enabled.
@@ -812,7 +775,7 @@ void Display()
     MoveLegDn
 
      Moves the Center leg down.
- */
+*/
 void MoveLegDn()
 {
     // Read the Pin to see where the leg is.
@@ -1086,18 +1049,16 @@ void CheckStance()
         // Center leg is up, and the body is straight.  This is a 2 leg Stance.
         if (LegUp == LOW && LegDn == HIGH && TiltUp == LOW && TiltDn == HIGH)
         {
-            //Stance = 1;
             Stance = TWO_LEG_STANCE;
-            strcpy(stanceName, "Two Legs.    ");
+            strcpy(stanceName, "Two Legs.    "); // LUTU
             return;
         }
 
         // Center leg is down, Body is tilted.  This is a 3 leg stance
         if (LegUp == HIGH && LegDn == LOW && TiltUp == HIGH && TiltDn == LOW)
         {
-            //Stance = 2;
             Stance = THREE_LEG_STANCE;
-            strcpy(stanceName, "Three Legs   ");
+            strcpy(stanceName, "Three Legs   "); // LDTD
             return;
         }
 
@@ -1121,7 +1082,7 @@ void CheckStance()
         // The droid is balanced on the center foot. (Probably about to fall over)
         if (LegUp == HIGH && LegDn == LOW && TiltUp == LOW && TiltDn == HIGH)
         {
-            Stance = 4;
+            Stance = 8;
             strcpy(stanceName, "Error - LDTU");
         }
 
@@ -1146,6 +1107,13 @@ void CheckStance()
         {
             Stance = 7;
             strcpy(stanceName, "Error - L?T?");
+        }
+
+        // Leg is up, body is tilted.  This should not be possible.  If it happens, we are in a bad state.
+        if (LegUp == LOW && LegDn == HIGH && TiltUp == HIGH && TiltDn == LOW)
+        {
+            Stance = 9;
+            strcpy(stanceName, "Error - LUTD");
         }
     }
 }
@@ -1284,7 +1252,7 @@ void Move()
         MoveTiltUp();
     }
     // target two legs, tilt is up, center leg unknown, Can not hurt to try and lift the leg again.
-    if (StanceTarget == TWO_LEG_STANCE && Stance == 4)
+    if (StanceTarget == TWO_LEG_STANCE && ((Stance == 4) || (Stance == 8)))
     {
         LegHappy = true;
         MoveLegUp();
@@ -1443,22 +1411,9 @@ void loop()
         ShowTime++;
         //DEBUG_PRINT("Showtime: ");DEBUG_PRINT_LN(ShowTime);
     }
-
-    /*
-      char NEW_SET[30];
-      char c = 0;
-      unsigned int flash_address = pgm_read_word(&COMMAND[0]);
-      do{
-        c = (char) pgm_read_byte(flash_address++);
-        DEBUG_PRINT(c);
-      //  strcat(NEW_SET, c);
-      } while (c!='\0');
-
-      //strcpy_P(NEW_SET, (char *)pgm_read_byte_near(&COMMAND[0]));
-      //DEBUG_PRINT_LN(NEW_SET);
-    */
 }
 
+#ifdef ENABLE_SERIAL_TRIGGER
 
  // Wow, we get a lot of use out of this code.
  // Yup here's all the Jawa Lite command processing again!
@@ -1702,3 +1657,5 @@ void doPcommand(int address, char* argument)
             break;
     }
 }
+
+#endif
