@@ -10,27 +10,13 @@
    https://www.ebay.com/itm/4-Channel-Rolling-Code-Remote-Receiver-and-Transmitter-CHJ-8802/163019935605?ssPageName=STRK%3AMEBIDX%3AIT&_trksid=p2057872.m2749.l2649
 
 
-   One button the Remote is used to acrivate the 3-2-3 system remotely.  Without that being pressed, no other
-   buttons will trigger a transition.  This works the same as Kevin's original master switch setting on the RC. (Aux1)
+   Button A on the remote is used to activate the 3-2-3 system remotely. Without that being pressed, no other
+   buttons will trigger a transition. This works similar to a master safety switch. The safety automatically
+   times out after 30 seconds so you don't accidentally trigger transitions if you walk away.
 
-   Also added is the ability to receive comands on the USB Serial to manage and trigger the 3-2-3 transitions.
-   Note that I use this for testing only, and if you connect the system to say MarcDuino or Stealth, you should
-   use the remote commands with Caution.  The same safety command is required before the main transitions will
-   be enabled, so there is some protection.  Additionally, the killswitch command will reset after 30 seconds
-   so if you've not triggered the transition, we go back to safe mode.
-
-   Sending P0 will enable/disable the transitions.  It's like a momentary switch with a 30 second timer.
-   Sending P2 will try to go to a two leg stance.
-   Sending P3 will try to go to a three leg stance.
-
-   The original RC triggers are still available.  Different trigger modes are selected with the #defines below
-
- * ************************************* WARNING ********************************************
-   If you're not hooking up an RC Transmitter, you MUST comment out ENABLE_RC_TRIGGER
-   If you do not the loop will become a 2 second loop due to the code that reads the pulses
-   from the RC.  Each read has a 1 second timeout and there's two reads!
-   This will most likely cause an issue on the 3->2 transitions.
- * ******************************************************************************************
+   Button B triggers a transition to three leg stance.
+   Button C triggers a transition to two leg stance.
+   Button D is reserved for future use.
 
    The Default Pins are for a Pro Micro
 
@@ -73,43 +59,10 @@
 USBSabertoothSerial C;
 USBSabertooth       ST(C, 128);              // Use address 128.
 
-Stream* serialPort;
-
-#ifdef ENABLE_SERIAL_TRIGGER
-#include "Wire.h"
-#define I2CAdress 123 // Because 323 or 232 are not valid!
-#endif
-
 /////
-// Forward Declarations
+// Control Mode - Rolling Code Remote
 /////
-void EmergencyStop();
-void receiveEvent(int eventCode);
-void serialEvent();
-byte buildCommand(char ch, char* output_str);
-void parseCommand(char* inputStr);
-void doPcommand(int address, char* argument);
-
-/////
-// Control Modes
-/////
-
-// It is recommended to only enable one of the commanding modes
-// RC or Rolling Code triggers or Serial Commands, but I'm not telling you what to do!
-// They do don't really co-exist currently, so don't expect things to work if you enable more than one.
-//
-// WARNING:  If there's no signal on the Aux1/Aux2 this routine shows the loop to one pass every 2 seconds!!!
-//
-
-/*
-   PICK ONE OF THESE BELOW!
-*/
-//#define ENABLE_RC_TRIGGER  // If you ise RC, use this one.
-#define ENABLE_ROLLING_CODE_TRIGGER  // If you use the rolling code remote, use this one.
-//#define ENABLE_SERIAL_TRIGGER // If you want to trigger transitions via serial use this one.
-/*
-   IF YOU DIDN"T PICK ONE, NOTHING WILL HAPPEN!
-*/
+#define ENABLE_ROLLING_CODE_TRIGGER
 
 /*
 
@@ -142,34 +95,15 @@ Adafruit_RGBLCDShield lcd = Adafruit_RGBLCDShield();
 #endif
 #endif
 
-////////////////////////////////
-///////////////////////////////
-// Command processing stuff //
-/////////////////////////////
-////////////////////////////
-
-// Command processing stuff
-// maximum number of characters in a command (63 chars since we need the null termination)
-#define CMD_MAX_LENGTH 64
-
-// memory for command string processing
-char cmdString[CMD_MAX_LENGTH];
-
 /////
-// Timing Varaibles
+// Timing Variables
 /////
-const int ReadInterval = 101;
 const int StanceInterval = 100;
 const int ShowTimeInterval = 100;
 unsigned long currentMillis = 0;      // stores the value of millis() in each iteration of loop()
-unsigned long PreviousReadMillis = 0;   //
 unsigned long PreviousStanceMillis = 0;
 unsigned long PreviousShowTimeMillis = 0;
-unsigned long lastDebounceTime = 0;  // the last time the output pin was toggled
-unsigned long debounceDelay = 50;    // the debounce time; increase if the output flickers
 unsigned long ShowTime = 0;
-unsigned long Aux1noPulseCount = 0;  // Count to make sure we have good radio comms.
-unsigned long Aux2noPulseCount = 0;  // Count to make sure we have good radio comms.
 
 
 /////
@@ -177,8 +111,6 @@ unsigned long Aux2noPulseCount = 0;  // Count to make sure we have good radio co
 /////
 #ifdef USE_WAVESHARE_ESP32_LCD
 // Valid input pins on the Waveshare ESP32 LCD are 0,1,2,3,4,18,19,20,23.  The rest are used for the SD/LCD/UART or not recommended for other reasons.
-#define Aux1Pin A2    //Input pin from the RC reciever
-#define Aux2Pin A3    //Input pin from the RC reciever
 #define TiltUpPin 0   //Limit switch input pin, Grounded when closed
 #define TiltDnPin 1   //Limit switch input pin, Grounded when closed
 #define LegUpPin  2   //Limit switch input pin, Grounded when closed
@@ -188,8 +120,6 @@ unsigned long Aux2noPulseCount = 0;  // Count to make sure we have good radio co
 #define ROLLING_CODE_BUTTON_C_PIN 19 // Transition between 3 and 2 legs.
 #define ROLLING_CODE_BUTTON_D_PIN 18
 #else
-#define Aux1Pin A2    //Input pin from the RC reciever
-#define Aux2Pin A3    //Input pin from the RC reciever
 #define TiltUpPin 6   //Limit switch input pin, Grounded when closed
 #define TiltDnPin 7   //Limit switch input pin, Grounded when closed
 #define LegUpPin  8   //Limit switch input pin, Grounded when closed
@@ -203,13 +133,6 @@ unsigned long Aux2noPulseCount = 0;  // Count to make sure we have good radio co
 /////
 // Variables to check R2 state for transitions
 /////
-const int ThrNumReadings = 4;      //these 5 lines are smoothing for the RC inputs
-int ThrReadings[ThrNumReadings];    // the readings from the analog input
-int ThrReadIndex = 0;              // the index of the current reading
-int ThrTotal = 0;                  // the running total
-int ThrAverage = 0;                // the average
-int Aux1 = 1500;
-int Aux2 = 1500;
 int TiltUp;
 int TiltDn;
 int LegUp;
@@ -226,15 +149,8 @@ int rollCodeC;
 int rollCodeD;
 bool enableRollCodeTransitions = false;
 unsigned long rollCodeTransitionTimeout; // Used to auto disable the enable signal after a set time
-bool enableCommandTransitions = false; // Used to enable transitions via Serial/i2c commands.
-unsigned long commandTransitionTimeout; // Used to auto disable the enable signal after a set time
 #define COMMAND_ENABLE_TIMEOUT 30000 // Default timeout of 30 seconds for performing a transition.
 bool killDebugSent = false;
-
-/////
-// Variables to check commands
-/////
-bool serialCommandReceived = false;  // Set if we ever receive a serial command
 
 /////
 // Let's define some human friendly names for the various stances.
@@ -279,8 +195,8 @@ unsigned long buttonDTimeout;
 // This gives me a nice way to enable/disable debug outputs.
 /////
 #ifdef DEBUG
-    #define DEBUG_PRINT_LN(msg)  serialPort->println(msg)
-    #define DEBUG_PRINT(msg)  serialPort->print(msg)
+    #define DEBUG_PRINT_LN(msg)  Serial.println(msg)
+    #define DEBUG_PRINT(msg)  Serial.print(msg)
 #else
     #define DEBUG_PRINT_LN(msg)
     #define DEBUG_PRINT(msg)
@@ -396,16 +312,6 @@ void SetBacklightColor(int color)
     #endif
 }
 
-#ifdef ENABLE_SERIAL_TRIGGER
-/*
-void sendCommand(uint8_t addr, char* command){
-
-  Wire.beginTransmission(addr);
-  Wire.write(command);
-  Wire.endTransmission();
-}
-*/
-#endif
 
 /*
    Setup
@@ -417,11 +323,6 @@ void sendCommand(uint8_t addr, char* command){
 */
 void setup()
 {
-    #ifdef ENABLE_RC_TRIGGER
-    pinMode(Aux1Pin, INPUT);  // Set the pin type for the Enable/Disable switch
-    pinMode(Aux2Pin, INPUT);  // Set the pin type for the transition joystick input.
-    #endif //ENABLE_RC_TRIGGER
-
     pinMode(TiltUpPin, INPUT_PULLUP);  // Limit Switch for body tilt (upper)
     pinMode(TiltDnPin, INPUT_PULLUP);  // Limit Switch for body tilt (lower)
     pinMode(LegUpPin,  INPUT_PULLUP);  // Limit Switch for leg lift (upper)
@@ -438,18 +339,11 @@ void setup()
     SabertoothTXPinSerial.begin(9600); // 9600 is the default baud rate for Sabertooth Packet Serial.
     // The Sabertooth library uses the Serial TX pin to send data to the motor controller
 
-    // Setup the USB Serial Port.
+    // Setup the USB Serial Port for debug output.
     #ifdef USE_WAVESHARE_ESP32_LCD
     Serial.begin(115200); // This is the USB Port on the Waveshare ESP32-C6.
     #else
     Serial.begin(9600); // This is the USB Port on a Pro Micro.
-    #endif
-    serialPort = &Serial;
-
-    // Setup I2C
-    #ifdef ENABLE_SERIAL_TRIGGER
-    Wire.begin(I2CAdress);                   // Start I2C Bus as Master I2C Address
-    Wire.onReceive(receiveEvent);            // register event so when we receive something we jump to receiveEvent();
     #endif
 
     // Init the display
@@ -492,91 +386,6 @@ void setup()
     StanceTarget = STANCE_NO_TARGET;
 }
 
-/*
-   Read inputs from the RC Controller
-
-   If ENABLE_RC_TRIGGER is defined, we will look for RC Inputs to enable transitions
-   If ENABLE_RC_TRIGGER is not defined, we will never set any valid transition states in this code.
-
- ***************************************** WARNING ****************************************
-   If there is no radio signal, or signal is lost, this could cause a faceplant.
-   The Timeout to get a pule is 1 second.  Since we check 2 pins for a pulse, we could
-   spend 2 seconds in this routine if there is no signal.
- ***************************************** WARNING ****************************************
-
-*/
-void ReadRC()
-{
-    #ifdef ENABLE_RC_TRIGGER
-    Aux1 = pulseIn(Aux1Pin, HIGH);
-    if (Aux1 == 0)
-    {
-        // pulseIn returning 0 is a special case.
-        // We did not receive any pulse in the current Timeout.
-        Aux1noPulseCount++;
-    }
-    else if (Aux1 < 500)
-    {
-        Aux1 = 1500;
-        Aux1noPulseCount = 0;
-    }
-    else
-    {
-        Aux1noPulseCount = 0;
-    }
-
-    Aux2 = pulseIn(Aux2Pin, HIGH);
-    if (Aux2 == 0)
-    {
-        // pulseIn returning 0 is a special case.
-        // We did not receive any pulse in the current Timeout.
-        Aux2noPulseCount++;
-    }
-    else if (Aux2 < 500)
-    {
-        Aux2 = 1500;
-        Aux2noPulseCount = 0;
-    }
-    else
-    {
-        Aux2noPulseCount = 0;
-    }
-
-    if (Aux1noPulseCount == 5)
-    {
-        // This is an error condition.
-        // We've had no signal from the radio in 5 seconds.
-        // We only print this message once.
-        DEBUG_PRINT_LN("ERROR:  No Signal on Aux1 for 5 seconds");
-        return;
-    }
-    if (Aux2noPulseCount == 5)
-    {
-        // This is an error condition.
-        // We've had no signal from the radio in 5 seconds.
-        // We only print this message once.
-        DEBUG_PRINT_LN("ERROR:  No Signal on Aux2 for 5 seconds");
-        return;
-    }
-
-    //-----------------------------------------------------------RC Radio master switch
-    // A toggle switch input from the rc reciever is 1000 when off, and 2000 when on. The following line says that if
-    // the toggle switch is on (aux1)  AND the joystick (aux 2) is near the ends of the travel will anything be triggered.
-    // just safer than a stick that can be bumped
-    // And even then it is not a command as much as a wish.
-
-    if ((Aux1 >= 1800) && (Aux2 <= 1100))
-    {
-        killDebugSent = false;
-        StanceTarget = THREE_LEG_STANCE; // Three Leg Stance
-    }
-    if ((Aux1 >= 1800) && (Aux2 >= 1800))
-    {
-        killDebugSent = false;
-        StanceTarget = TWO_LEG_STANCE; // Two Leg Stance
-    }
-    #endif //ENABLE_RC_TRIGGER
-}
 
 /*
    ReadLimitSwitches
@@ -682,12 +491,6 @@ void Display()
 {
     // We only output this if DEBUG_VERBOSE mode is enabled.
     #ifdef DEBUG_VERBOSE
-    DEBUG_PRINT("Aux1 (RC Kill): ");
-    DEBUG_PRINT_LN(Aux1);
-    DEBUG_PRINT("Aux2 (RC Trig): ");
-    DEBUG_PRINT_LN(Aux2);
-    DEBUG_PRINT("Serial Enabled: ");
-    DEBUG_PRINT_LN(enableCommandTransitions);
     DEBUG_PRINT("Tilt Up       : ");
     TiltUp ? DEBUG_PRINT_LN("Open") : DEBUG_PRINT_LN("Closed");
     DEBUG_PRINT("Tilt Down     : ");
@@ -1122,6 +925,25 @@ void CheckStance()
 }
 
 /*
+   EmergencyStop
+
+   If we need to stop everything, this will do it!
+
+*/
+void EmergencyStop()
+{
+    ST.motor(1, 0);
+    ST.motor(2, 0);
+    LegMoving = false;
+    TiltMoving = false;
+
+    // Setting StanceTarget to STANCE_NO_TARGET ensures we don't try to restart movement.
+    StanceTarget = STANCE_NO_TARGET;
+
+    DEBUG_PRINT_LN("Emergency Stop.");
+}
+
+/*
    Each time through the loop this function is called.
    This checks the killswitch status, and if the killswitch is
    toggled, such that we disable the 2-3-2 system this code will
@@ -1136,25 +958,8 @@ void checkKillSwitch()
 {
     bool stopMotors = false;
 
-    #ifdef ENABLE_SERIAL_TRIGGER
-    if (!enableCommandTransitions && serialCommandReceived)
-    {
-        stopMotors = true;
-    }
-    #endif
-
     #ifdef ENABLE_ROLLING_CODE_TRIGGER
     if (!enableRollCodeTransitions)
-    {
-        stopMotors = true;
-    }
-    #endif
-
-    #ifdef ENABLE_RC_TRIGGER
-    // WARNING.  IF NO RADIO IS CONNECTED, THIS WILL DELAY FOR 1 SECOND!
-    Aux1 = pulseIn(Aux1Pin, HIGH);
-    // A signal less than 1800 means the switch is off
-    if (Aux1 < 1800)
     {
         stopMotors = true;
     }
@@ -1167,26 +972,6 @@ void checkKillSwitch()
         EmergencyStop();
     }
 }
-
-/*
-   EmergencyStop
-
-   If we need to stop everything, this will do it!
-
- */
-void EmergencyStop()
-{
-    ST.motor(1, 0);
-    ST.motor(2, 0);
-    LegMoving = false;
-    TiltMoving = false;
-
-    // Setting StanceTarget to STANCE_NO_TARGET ensures we don't try to restart movement.
-    StanceTarget = STANCE_NO_TARGET;
-
-    DEBUG_PRINT_LN("Emergency Stop.");
-}
-
 
 /*
    Move
@@ -1359,13 +1144,6 @@ void loop()
     ReadRollingCodeTrigger(); // Only does something if ENABLE_ROLLING_CODE_TRIGGER is defined.
     ReadLimitSwitches();
 
-    // ReadRC uses blocking pulseIn() calls, so it remains on the interval.
-    if (currentMillis - PreviousReadMillis >= ReadInterval)
-    {
-        PreviousReadMillis = currentMillis;
-        ReadRC(); // Only does something if ENABLE_RC_TRIGGER is defined.
-    }
-
     if (currentMillis - PreviousStanceMillis >= StanceInterval)
     {
         PreviousStanceMillis = currentMillis;
@@ -1379,17 +1157,7 @@ void loop()
         Display();
     }
 
-    // Given the order of the checks here, we only check the timeout if the transitions are enabled
-    // This minimises the time taken to do the check most of the time.
-    if (enableCommandTransitions && (currentMillis >= commandTransitionTimeout))
-    {
-        // We have exceeded the time to do a transition start.
-        // Auto Disable the safety so we don't accidentally trigger the transition.
-        enableCommandTransitions = false;
-        SetBacklightColor(BLUE);
-        //DEBUG_PRINT_LN("Warning: Transition Enable Timeout reached.  Disabling Command Transitions.");
-    }
-
+    // Check if the rolling code transition timeout has expired.
     if (enableRollCodeTransitions && (currentMillis >= rollCodeTransitionTimeout))
     {
         // We have exceeded the time to do a transition start.
@@ -1420,250 +1188,3 @@ void loop()
         //DEBUG_PRINT("Showtime: ");DEBUG_PRINT_LN(ShowTime);
     }
 }
-
-#ifdef ENABLE_SERIAL_TRIGGER
-
- // Wow, we get a lot of use out of this code.
- // Yup here's all the Jawa Lite command processing again!
-
- // function that executes whenever data is received from an I2C master
- // this function is registered as an event, see setup()
-void receiveEvent(int eventCode)
-{
-    while (Wire.available())
-    {
-        // New I2C handling
-        // Needs to be tested, but uses the same parser as Serial!
-        bool command_available;
-        char ch = (char)Wire.read();
-
-        DEBUG_PRINT("I2C Character received "); DEBUG_PRINT_LN(ch);
-
-        command_available = buildCommand(ch, cmdString); // build command line
-
-        if (command_available)
-        {
-            parseCommand(cmdString);  // interpret the command
-        }
-    }
-}
-
-
- /*
-    serialEventRun
-
-    SerialEvent occurs whenever a new data comes in the
-    hardware serial RX.  This routine is run between each
-    time loop() runs, so using delay inside loop can delay
-    response.  Multiple bytes of data may be available.
-
-    That's ok ... I never use delay()!
-
- */
-void serialEventRun(void)
-{
-    if (serialPort->available()) serialEvent();
-}
-
-void serialEvent()
-{
-    DEBUG_PRINT_LN("Serial In");
-    bool command_available;
-
-    while (serialPort->available())
-    {
-        char ch = (char)serialPort->read();  // get the new byte
-
-        // New improved command handling
-        command_available = buildCommand(ch, cmdString); // build command line
-        if (command_available)
-        {
-            parseCommand(cmdString);  // interpret the command
-        }
-    }
-    sei();
-}
-
-
- ////////////////////////////////////////////////////////
- // Command language - JawaLite emulation
- ///////////////////////////////////////////////////////
-
-
- ////////////////////////////////
- // command line builder, makes a valid command line from the input
-byte buildCommand(char ch, char* output_str)
-{
-    static uint8_t pos = 0;
-    switch (ch)
-    {
-        case '\r':                          // end character recognized
-            output_str[pos] = '\0'; // append the end of string character
-            pos = 0;      // reset buffer pointer
-            return true;      // return and signal command ready
-            break;
-        default:        // regular character
-            output_str[pos] = ch; // append the  character to the command string
-            if (pos <= CMD_MAX_LENGTH - 1)pos++; // too many characters, discard them.
-            break;
-    }
-    return false;
-}
-
- ///////////////////////////////////
- // command parser and switcher,
- // breaks command line in pieces,
- // rejects invalid ones,
- // switches to the right command
-void parseCommand(char* inputStr)
-{
-    byte hasArgument = false;
-    byte hasTiming = false;
-    int argument;
-    int address;
-    int timing;
-    byte pos = 0;
-    byte endArg = 0;
-    byte length = strlen(inputStr);
-    byte PSIPos = length;
-    if (length < 2) goto beep; // not enough characters
-
-    /*
-      DEBUG_PRINT(" Here's the input string: ");
-      DEBUG_PRINT_LN(inputStr);
-    */
-
-    // get the adress, one or two digits
-    char addrStr[3];
-    if (!isdigit(inputStr[pos])) goto beep; // invalid, first char not a digit
-    addrStr[pos] = inputStr[pos];
-    pos++;                            // pos=1
-    if (isdigit(inputStr[pos]))         // add second digit address if it's there
-    {
-        addrStr[pos] = inputStr[pos];
-        pos++;                            // pos=2
-    }
-    addrStr[pos] = '\0';                // add null terminator
-
-    address = atoi(addrStr);       // extract the address
-
-    // check for more
-    if (!length > pos) goto beep;         // invalid, no command after address
-
-
-    // special case of P commands, where it's easier to parse the string to get digits
-    if (inputStr[pos] == 'P')
-    {
-        pos++;
-        if (!length > pos) goto beep;  // no message argument
-        doPcommand(address, inputStr + pos); // pass rest of string as argument
-        return;                     // exit
-    }
-
-    // other commands, get the numerical argument after the command character
-
-    pos++;                             // need to increment in order to peek ahead of command char
-    if (!length > pos)
-    {
-        hasArgument = false;  // end of string reached, no arguments
-        hasTiming = false;
-    }
-    else
-    {
-        for (byte i = pos; i < length; i++)
-        {
-            if (!isdigit(inputStr[i])) goto beep; // invalid, end of string contains non-numerial arguments
-        }
-        argument = atoi(inputStr + pos); // that's the numerical argument after the command character
-        hasArgument = true;
-    }
-
-    // switch on command character
-    switch (inputStr[pos - 1])            // 2nd or third char, should be the command char
-    {
-        default:
-            goto beep;                        // unknown command
-            break;
-    }
-
-    return;                               // normal exit
-
-beep:                                 // error exit
-    // Dont know what this does ... idnoring it for now!
-    //serialPort->write(0x7);             // beep the terminal, if connected
-    return;
-}
-
- ////////////////////
- // Command Executors
-
- // Parameter handling for Logic settings
-void doPcommand(int address, char* argument)
-{
-    uint8_t param = argument[0] - '0';
-    char* value_array = argument + 1;
-    signed long value = atol(value_array);
-
-    /*
-      DEBUG_PRINT_LN();
-      DEBUG_PRINT("Command: P ");
-      DEBUG_PRINT("Address: ");
-      DEBUG_PRINT(address);
-      DEBUG_PRINT(" Parameter: ");
-      DEBUG_PRINT_LN(param);
-      DEBUG_PRINT(" Value: ");
-      DEBUG_PRINT_LN(value);
-    */
-
-    switch (param)
-    {
-        serialCommandReceived = true;
-        case 0:
-            if (!enableCommandTransitions)
-            {
-                enableCommandTransitions = true;
-                killDebugSent = false;
-                commandTransitionTimeout = millis() + COMMAND_ENABLE_TIMEOUT;
-                SetBacklightColor(VIOLET);
-                DEBUG_PRINT_LN("Command Transitions Enabled");
-            }
-            else
-            {
-                enableCommandTransitions = false;
-                SetBacklightColor(BLUE);
-                killDebugSent = false;
-                DEBUG_PRINT_LN("Command Transitions Disabled");
-            }
-            break;
-        case 2:
-            // We don't need a value here.  Just trigger a transition.
-            // We check that we are allowed to transition first.
-            if (enableCommandTransitions)
-            {
-                DEBUG_PRINT_LN("Moving to Two Leg Stance.");
-                StanceTarget = TWO_LEG_STANCE;
-            }
-            else
-            {
-                DEBUG_PRINT_LN("Command Transitions Disabled.  Ignoring the request.");
-            }
-            break;
-        case 3:
-            // We don't need a value here.  Just trigger a transition.
-            // We check that we are allowed to transition first.
-            if (enableCommandTransitions)
-            {
-                DEBUG_PRINT_LN("Moving to Three Leg Stance.");
-                StanceTarget = THREE_LEG_STANCE;
-            }
-            else
-            {
-                DEBUG_PRINT_LN("Command Transitions Disabled.  Ignoring the request.");
-            }
-            break;
-        default:
-            break;
-    }
-}
-
-#endif
