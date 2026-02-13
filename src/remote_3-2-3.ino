@@ -52,9 +52,7 @@
    When starting a transition, if the expected Limit switches don't release stop! - TBD
    Add a STOP command, so that if the safety is toggled, the sequence stops immediately - DONE
    Convert ShowTime to be a timer, instead of a counter.  Just use the counter directly. - TBD
-   Check for over amperage?? - TBD
-   Update the LegHappy/TiltHappy to be true when good, false when not.  Currenty it's inverted.
-
+   Check for over amperage?? - TBD   
 */
 
 // If using a Waveshare ESP32 MCU/LCD, this uses different pins than the Arduino Pro Micro,
@@ -161,12 +159,10 @@ char cmdString[CMD_MAX_LENGTH];
 // Timing Varaibles
 /////
 const int ReadInterval = 101;
-const int DisplayInterval = 5000;
 const int StanceInterval = 100;
 const int ShowTimeInterval = 100;
 unsigned long currentMillis = 0;      // stores the value of millis() in each iteration of loop()
 unsigned long PreviousReadMillis = 0;   //
-unsigned long PreviousDisplayMillis = 0;
 unsigned long PreviousStanceMillis = 0;
 unsigned long PreviousShowTimeMillis = 0;
 unsigned long lastDebounceTime = 0;  // the last time the output pin was toggled
@@ -220,9 +216,10 @@ int LegUp;
 int LegDn;
 int Stance;
 int StanceTarget;
-char stanceName[13] = "Three Legs.";
-bool LegHappy;  // False if the leg is unhappy, True if it is happy
-bool TiltHappy; // False if the tilt is unhappy, True if it is happy
+int previousStance = -1;  // Track previous stance for display updates
+char stanceName[16] = "Three Legs.";
+bool LegMoving;  // False if leg is at target, True if leg is moving
+bool TiltMoving; // False if tilt is at target, True if tilt is moving
 int rollCodeA;
 int rollCodeB;
 int rollCodeC;
@@ -242,8 +239,19 @@ bool serialCommandReceived = false;  // Set if we ever receive a serial command
 /////
 // Let's define some human friendly names for the various stances.
 /////
-#define TWO_LEG_STANCE 1
-#define THREE_LEG_STANCE 2
+enum Stance
+{
+    STANCE_NO_TARGET = 0,
+    TWO_LEG_STANCE = 1,
+    THREE_LEG_STANCE = 2,
+    STANCE_ERROR_LEG_UP_TILT_UNKNOWN = 3,
+    STANCE_ERROR_LEG_UNKNOWN_TILT_UP = 4,
+    STANCE_ERROR_LEG_DOWN_TILT_UNKNOWN = 5,
+    STANCE_ERROR_LEG_UNKNOWN_TILT_DOWN = 6,
+    STANCE_ERROR_ALL_UNKNOWN = 7,
+    STANCE_ERROR_LEG_DOWN_TILT_UP = 8,
+    STANCE_ERROR_LEG_UP_TILT_DOWN = 9
+};
 
 /////
 // Debounce for the Rolling code.
@@ -481,7 +489,7 @@ void setup()
     #endif
 
     // Setup the Target as no-target to begin.
-    StanceTarget = 0;
+    StanceTarget = STANCE_NO_TARGET;
 }
 
 /*
@@ -591,36 +599,23 @@ void ReadRollingCodeTrigger()
     #ifdef ENABLE_ROLLING_CODE_TRIGGER
 
     unsigned long now = millis();
-    rollCodeA = digitalRead(ROLLING_CODE_BUTTON_A_PIN); // Used for Killswitch.
+    rollCodeA = digitalRead(ROLLING_CODE_BUTTON_A_PIN);
     rollCodeB = digitalRead(ROLLING_CODE_BUTTON_B_PIN);
     rollCodeC = digitalRead(ROLLING_CODE_BUTTON_C_PIN);
     rollCodeD = digitalRead(ROLLING_CODE_BUTTON_D_PIN);
 
-    /*
-    char rollCodeState[5];
-    rollCodeState[0] = (rollCodeA == HIGH) ? '1' : '0';
-    rollCodeState[1] = (rollCodeB == HIGH) ? '1' : '0';
-    rollCodeState[2] = (rollCodeC == HIGH) ? '1' : '0';
-    rollCodeState[3] = (rollCodeD == HIGH) ? '1' : '0';
-    rollCodeState[4] = '\0';
-    DEBUG_PRINT_LN("Rolling Code State: " + String(rollCodeState));
-    */
-
-
-    // Killswitch pressed.
-    // Since the high signal lasts for several hundred milliseconds, we need to prevent checking 
-    // for some small period of time.
+    // Button A: Toggle rolling code transitions enable/disable.
+    // Only triggers on the rising edge (LOW -> HIGH transition).
     if (now >= buttonATimeout)
     {
-        if (rollCodeA == HIGH)
+        if (rollCodeA == HIGH && buttonALastState == LOW)
         {
-            DEBUG_PRINT_LN("Button time > 500ms");
+            buttonATimeout = now + BUTTON_DEBOUNCE_TIME;
             if (!enableRollCodeTransitions)
             {
                 enableRollCodeTransitions = true;
                 killDebugSent = false;
                 rollCodeTransitionTimeout = now + COMMAND_ENABLE_TIMEOUT;
-                buttonATimeout = now + BUTTON_DEBOUNCE_TIME;
                 SetBacklightColor(VIOLET);
                 DEBUG_PRINT_LN("Rolling Code Transmitter Transitions Enabled");
             }
@@ -629,50 +624,47 @@ void ReadRollingCodeTrigger()
                 enableRollCodeTransitions = false;
                 killDebugSent = false;
                 SetBacklightColor(BLUE);
-                buttonATimeout = now + BUTTON_DEBOUNCE_TIME;
                 DEBUG_PRINT_LN("Rolling Code Transmitter Transitions Disabled");
             }
-            return;
         }
+        buttonALastState = rollCodeA;
     }
 
+    // Button B: Transition to three leg stance.
     if (now >= buttonBTimeout)
     {
-        // Button B pressed.
-        if (enableRollCodeTransitions && (rollCodeB == HIGH))
+        if (enableRollCodeTransitions && rollCodeB == HIGH && buttonBLastState == LOW)
         {
             buttonBTimeout = now + BUTTON_DEBOUNCE_TIME;
-            // Start the two to three transition.
-            StanceTarget = THREE_LEG_STANCE; // Three Leg Stance
+            StanceTarget = THREE_LEG_STANCE;
             DEBUG_PRINT_LN("Moving to Three Leg Stance.");
-            return;
         }
-    }
-    
-    if (now >= buttonCTimeout)
-    {
-        // Button pressed.
-        if (enableRollCodeTransitions && (rollCodeC == HIGH))
-        {
-            buttonCTimeout = now + BUTTON_DEBOUNCE_TIME;
-            // Start the three to two transition.
-            StanceTarget = TWO_LEG_STANCE; // Two Leg Stance
-            DEBUG_PRINT_LN("Moving to Two Leg Stance.");
-            return;
-        }
+        buttonBLastState = rollCodeB;
     }
 
+    // Button C: Transition to two leg stance.
+    if (now >= buttonCTimeout)
+    {
+        if (enableRollCodeTransitions && rollCodeC == HIGH && buttonCLastState == LOW)
+        {
+            buttonCTimeout = now + BUTTON_DEBOUNCE_TIME;
+            StanceTarget = TWO_LEG_STANCE;
+            DEBUG_PRINT_LN("Moving to Two Leg Stance.");
+        }
+        buttonCLastState = rollCodeC;
+    }
+
+    // Button D: Reserved for future use.
     if (now >= buttonDTimeout)
     {
-        // Button pressed.
-        if (enableRollCodeTransitions && (rollCodeD == HIGH))
+        if (enableRollCodeTransitions && rollCodeD == HIGH && buttonDLastState == LOW)
         {
             buttonDTimeout = now + BUTTON_DEBOUNCE_TIME;
-            // Does nothing currently... Perhaps a different 2->3 mode?
-            DEBUG_PRINT_LN("Button 4 Pressed");
-            return;
+            DEBUG_PRINT_LN("Button D Pressed");
         }
+        buttonDLastState = rollCodeD;
     }
+
     #endif
 }
 
@@ -708,10 +700,10 @@ void Display()
     DEBUG_PRINT(Stance); DEBUG_PRINT(": "); DEBUG_PRINT_LN(stanceName);
     DEBUG_PRINT("Stance Target : ");
     DEBUG_PRINT_LN(StanceTarget);
-    DEBUG_PRINT("Leg Happy     : ");
-    DEBUG_PRINT_LN(LegHappy);
-    DEBUG_PRINT("Tilt Happy    : ");
-    DEBUG_PRINT_LN(TiltHappy);
+    DEBUG_PRINT("Leg Moving    : ");
+    DEBUG_PRINT_LN(LegMoving);
+    DEBUG_PRINT("Tilt Moving   : ");
+    DEBUG_PRINT_LN(TiltMoving);
     DEBUG_PRINT("Show Time     : ");
     DEBUG_PRINT_LN(ShowTime);
     #endif // DEBUG_VERBOSE
@@ -767,7 +759,7 @@ void Display()
 
 /*
    Actual movement commands are here,  when we send the command to move leg down, first it checks the leg down limit switch, if it is closed it
-   stops the motor, sets a flag (happy) and then exits the loop, if it is open the down motor is triggered.
+   stops the motor, sets a flag (Moving) and then exits the loop, if it is open the down motor is triggered.
    all 4 work the same way
 */
 
@@ -785,7 +777,7 @@ void MoveLegDn()
     if (LegDn == LOW)
     {
         ST.motor(1, 0);     // Stop.
-        LegHappy = false;   // Record that we are in a good state.
+        LegMoving = false;   // Record that we are in a good state.
         return;
     }
 
@@ -811,7 +803,7 @@ void MoveLegUp()
     if (LegUp == LOW)
     {
         ST.motor(1, 0);     // Stop.
-        LegHappy = false;   // Record that we are in a good state.
+        LegMoving = false;   // Record that we are in a good state.
         return;
     }
 
@@ -834,16 +826,16 @@ void MoveTiltDn()
     TiltDn = digitalRead(TiltDnPin);
 
     // If the Limit switch is closed, we should stop the motor.
-    if (TiltDn == 0)
+    if (TiltDn == LOW)
     {
         ST.motor(2, 0);     // Stop.
-        TiltHappy = false;  // Record that we are in a good state.
+        TiltMoving = false;  // Record that we are in a good state.
         return;
     }
 
     // If the switch is open, then we need to move the motor until
     // the switch is closed.
-    if (TiltDn == 1)
+    if (TiltDn == HIGH)
     {
         ST.motor(2, 2047);  // Go forward at full power.
     }
@@ -863,7 +855,7 @@ void MoveTiltUp()
     if (TiltUp == LOW)
     {
         ST.motor(2, 0);     // Stop.
-        TiltHappy = false;  // Record that we are in a good state.
+        TiltMoving = false;  // Record that we are in a good state.
         return;
     }
 
@@ -940,7 +932,7 @@ void TwoToThree()
     if (LegDn == LOW)
     {
         ST.motor(1, 0);    // Stop
-        LegHappy = false;  // Record that we are in a good state.
+        LegMoving = false;  // Record that we are in a good state.
     }
     else if (LegDn == HIGH)
     {
@@ -952,7 +944,7 @@ void TwoToThree()
     if (TiltDn == LOW)
     {
         ST.motor(2, 0);     // Stop
-        TiltHappy = false;  // Record that we are in a good state.
+        TiltMoving = false;  // Record that we are in a good state.
     }
     else if (TiltDn == HIGH)
     {
@@ -986,7 +978,7 @@ void ThreeToTwo()
     if (LegUp == LOW)
     {
         ST.motor(1, 0);    // Stop
-        LegHappy = false;  // Record that we are in a good state.
+        LegMoving = false;  // Record that we are in a good state.
     }
 
     // TODO:  Convert the counters to just use a timer.
@@ -1008,7 +1000,7 @@ void ThreeToTwo()
     if (TiltUp == LOW)
     {
         ST.motor(2, 0);     // Stop
-        TiltHappy = false;  // Record that we are in a good state.
+        TiltMoving = false;  // Record that we are in a good state.
     }
     if (TiltUp == HIGH)
     {
@@ -1018,10 +1010,21 @@ void ThreeToTwo()
 
 
 /*
+   Stance Error Code Legend:
+   L = Leg position
+   T = Tilt position
+   U = Up (limit switch closed/pressed)
+   D = Down (limit switch closed/pressed)
+   ? = Unknown (limit switch open/not pressed)
+
+   Example: "LUT?" means Leg is Up, Tilt is Unknown
+*/
+
+/*
    CheckStance
 
    This is simply taking all of the possibilities of the switch positions and giving them a number.
-   The loop only runs when both happy flags are triggered, meaning that it does not run in the middle of
+   The loop only runs when both *Moving flags are false, meaning that it does not run in the middle of
    a transition.
 
    At any time, including power up, the droid can run a check and come up with a number as to how he is standing.
@@ -1043,8 +1046,8 @@ void ThreeToTwo()
  */
 void CheckStance()
 {
-    // We only do this if the leg and tilt are NOT happy.
-    if (LegHappy == false && TiltHappy == false)
+    // We only do this if the leg and tilt are NOT moving.
+    if (LegMoving == false && TiltMoving == false)
     {
         // Center leg is up, and the body is straight.  This is a 2 leg Stance.
         if (LegUp == LOW && LegDn == HIGH && TiltUp == LOW && TiltDn == HIGH)
@@ -1066,7 +1069,7 @@ void CheckStance()
         // The body is somewhere between straight and tilted.
         if (LegUp == LOW && LegDn == HIGH && TiltUp == HIGH && TiltDn == HIGH)
         {
-            Stance = 3;
+            Stance = STANCE_ERROR_LEG_UP_TILT_UNKNOWN;
             strcpy(stanceName, "Error - LUT?");
         }
 
@@ -1074,7 +1077,7 @@ void CheckStance()
         // Body is straight for a 2 leg stance.
         if (LegUp == HIGH && LegDn == HIGH && TiltUp == LOW && TiltDn == HIGH)
         {
-            Stance = 4;
+            Stance = STANCE_ERROR_LEG_UNKNOWN_TILT_UP;
             strcpy(stanceName, "Error - L?TU");
         }
 
@@ -1082,7 +1085,7 @@ void CheckStance()
         // The droid is balanced on the center foot. (Probably about to fall over)
         if (LegUp == HIGH && LegDn == LOW && TiltUp == LOW && TiltDn == HIGH)
         {
-            Stance = 8;
+            Stance = STANCE_ERROR_LEG_DOWN_TILT_UP;
             strcpy(stanceName, "Error - LDTU");
         }
 
@@ -1090,7 +1093,7 @@ void CheckStance()
         // The body is somewhere between straight and 18 degrees
         if (LegUp == HIGH && LegDn == LOW && TiltUp == HIGH && TiltDn == HIGH)
         {
-            Stance = 5;
+            Stance = STANCE_ERROR_LEG_DOWN_TILT_UNKNOWN;
             strcpy(stanceName, "Error - LDT?");
         }
 
@@ -1098,21 +1101,21 @@ void CheckStance()
         // Body is tilted for a 3 leg stance.
         if (LegUp == HIGH && LegDn == HIGH && TiltUp == HIGH && TiltDn == LOW)
         {
-            Stance = 6;
+            Stance = STANCE_ERROR_LEG_UNKNOWN_TILT_DOWN;
             strcpy(stanceName, "Error - L?TD");
         }
 
         // All 4 limit switches are open.  No idea where we are.
         if (LegUp == HIGH && LegDn == HIGH && TiltUp == HIGH && TiltDn == HIGH)
         {
-            Stance = 7;
+            Stance = STANCE_ERROR_ALL_UNKNOWN;
             strcpy(stanceName, "Error - L?T?");
         }
 
         // Leg is up, body is tilted.  This should not be possible.  If it happens, we are in a bad state.
         if (LegUp == LOW && LegDn == HIGH && TiltUp == HIGH && TiltDn == LOW)
         {
-            Stance = 9;
+            Stance = STANCE_ERROR_LEG_UP_TILT_DOWN;
             strcpy(stanceName, "Error - LUTD");
         }
     }
@@ -1175,11 +1178,11 @@ void EmergencyStop()
 {
     ST.motor(1, 0);
     ST.motor(2, 0);
-    LegHappy = false;
-    TiltHappy = false;
+    LegMoving = false;
+    TiltMoving = false;
 
-    // Setting StanceTarget to 0 ensures we don't try to restart movement.
-    StanceTarget = 0;
+    // Setting StanceTarget to STANCE_NO_TARGET ensures we don't try to restart movement.
+    StanceTarget = STANCE_NO_TARGET;
 
     DEBUG_PRINT_LN("Emergency Stop.");
 }
@@ -1211,12 +1214,12 @@ void EmergencyStop()
 void Move()
 {
     // there is no stance target 0, so turn off your motors and do nothing.
-    if (StanceTarget == 0)
+    if (StanceTarget == STANCE_NO_TARGET)
     {
         ST.motor(1, 0);
         ST.motor(2, 0);
-        LegHappy = false;
-        TiltHappy = false;
+        LegMoving = false;
+        TiltMoving = false;
         return;
     }
     // if you are told to go where you are, then do nothing
@@ -1224,94 +1227,94 @@ void Move()
     {
         ST.motor(1, 0);
         ST.motor(2, 0);
-        LegHappy = false;
-        TiltHappy = false;
+        LegMoving = false;
+        TiltMoving = false;
         return;
     }
     // Stance 7 is bad, all 4 switches open, no idea where anything is.  do nothing.
-    if (Stance == 7)
+    if (Stance == STANCE_ERROR_ALL_UNKNOWN)
     {
         ST.motor(1, 0);
         ST.motor(2, 0);
-        LegHappy = false;
-        TiltHappy = false;
+        LegMoving = false;
+        TiltMoving = false;
         return;
     }
     // if you are in three legs and told to go to 2
     if (StanceTarget == TWO_LEG_STANCE && Stance == THREE_LEG_STANCE)
     {
-        LegHappy = true;
-        TiltHappy = true;
+        LegMoving = true;
+        TiltMoving = true;
         ThreeToTwo();
     }
     // This is the first of the slight unknowns, target is two legs,  look up to stance 3, the center leg is up, but the tilt is unknown.
     //You are either standing on two legs, or already in a pile on the ground. Cant hurt to try tilting up.
-    if (StanceTarget == TWO_LEG_STANCE && Stance == 3)
+    if (StanceTarget == TWO_LEG_STANCE && Stance == STANCE_ERROR_LEG_UP_TILT_UNKNOWN)
     {
-        TiltHappy = true;
+        TiltMoving = true;
         MoveTiltUp();
     }
     // target two legs, tilt is up, center leg unknown, Can not hurt to try and lift the leg again.
-    if (StanceTarget == TWO_LEG_STANCE && ((Stance == 4) || (Stance == 8)))
+    if (StanceTarget == TWO_LEG_STANCE && ((Stance == STANCE_ERROR_LEG_UNKNOWN_TILT_UP) || (Stance == STANCE_ERROR_LEG_DOWN_TILT_UP)))
     {
-        LegHappy = true;
+        LegMoving = true;
         MoveLegUp();
     }
     //Target is two legs, center foot is down, tilt is unknown, too risky do nothing.
-    if (StanceTarget == TWO_LEG_STANCE && Stance == 5)
+    if (StanceTarget == TWO_LEG_STANCE && Stance == STANCE_ERROR_LEG_DOWN_TILT_UNKNOWN)
     {
         ST.motor(1, 0);
         ST.motor(2, 0);
-        LegHappy = false;
-        TiltHappy = false;
+        LegMoving = false;
+        TiltMoving = false;
         return;
     }
     // target is two legs, tilt is down, center leg is unknown,  too risky, do nothing.
-    if (StanceTarget == TWO_LEG_STANCE && Stance == 6)
+    if (StanceTarget == TWO_LEG_STANCE && Stance == STANCE_ERROR_LEG_UNKNOWN_TILT_DOWN)
     {
         ST.motor(1, 0);
         ST.motor(2, 0);
-        LegHappy = false;
-        TiltHappy = false;
+        LegMoving = false;
+        TiltMoving = false;
         return;
     }
     // target is three legs, stance is two legs, run two to three.
     if (StanceTarget == THREE_LEG_STANCE && Stance == TWO_LEG_STANCE)
     {
-        LegHappy = true;
-        TiltHappy = true;
+        LegMoving = true;
+        TiltMoving = true;
         TwoToThree();
     }
     //Target is three legs. center leg is up, tilt is unknown, safer to do nothing, Recover from stance 3 with the up command
-    if (StanceTarget == THREE_LEG_STANCE && Stance == 3)
+    if (StanceTarget == THREE_LEG_STANCE && Stance == STANCE_ERROR_LEG_UP_TILT_UNKNOWN)
     {
         ST.motor(1, 0);
         ST.motor(2, 0);
-        LegHappy = false;
-        TiltHappy = false;
+        LegMoving = false;
+        TiltMoving = false;
         return;
     }
     // target is three legs, but don't know where the center leg is.   Best to not try this,
     // recover from stance 4 with the up command,
-    if (StanceTarget == THREE_LEG_STANCE && Stance == 4)
+    if (StanceTarget == THREE_LEG_STANCE && Stance == STANCE_ERROR_LEG_UNKNOWN_TILT_UP)
     {
         ST.motor(1, 0);
         ST.motor(2, 0);
-        LegHappy = false;
-        TiltHappy = false;
+        LegMoving = false;
+        TiltMoving = false;
         return;
     }
-    // Target is three legs, the center foot is down, tilt is unknownm. either on 3 legs now, or a smoking mess,
-    // nothing to loose in trying to tilt down again
-    if (StanceTarget == THREE_LEG_STANCE && Stance == 5)
+    // Target is three legs, the center foot is down, tilt is unknown. either on 3 legs now, or a smoking mess,
+    // nothing to lose in trying to tilt down again
+    if (StanceTarget == THREE_LEG_STANCE && Stance == STANCE_ERROR_LEG_DOWN_TILT_UNKNOWN)
     {
-        TiltHappy = true;
+        TiltMoving = true;
         MoveTiltDn();
     }
-    // kinda like above, Target is 3 legs, tilt is down, center leg is unknown, ......got nothing to loose.
-    if (StanceTarget == THREE_LEG_STANCE && Stance == 6)
+    // kinda like above, Target is 3 legs, tilt is down, center leg is unknown, ......got nothing to lose.
+    if (StanceTarget == THREE_LEG_STANCE && Stance == STANCE_ERROR_LEG_UNKNOWN_TILT_DOWN)
     {
-        LegHappy = true;
+        LegMoving = true;
         MoveLegDn();
     }
 }
@@ -1351,24 +1354,29 @@ void loop()
     // The assumption is that if you hit the killswitch, it was for a good reason.
     //checkKillSwitch();
 
+    // Read rolling code buttons and limit switches every loop iteration.
+    // These are instant digitalRead() calls and should not be throttled.
+    ReadRollingCodeTrigger(); // Only does something if ENABLE_ROLLING_CODE_TRIGGER is defined.
+    ReadLimitSwitches();
+
+    // ReadRC uses blocking pulseIn() calls, so it remains on the interval.
     if (currentMillis - PreviousReadMillis >= ReadInterval)
     {
         PreviousReadMillis = currentMillis;
         ReadRC(); // Only does something if ENABLE_RC_TRIGGER is defined.
-        ReadRollingCodeTrigger(); // Only does something if ENABLE_ROLLING_CODE_TRIGGER is defined.
-        ReadLimitSwitches();
-    }
-
-    if (currentMillis - PreviousDisplayMillis >= DisplayInterval)
-    {
-        PreviousDisplayMillis = currentMillis;
-        Display();
     }
 
     if (currentMillis - PreviousStanceMillis >= StanceInterval)
     {
         PreviousStanceMillis = currentMillis;
         CheckStance();
+    }
+
+    // Update LCD immediately when stance changes
+    if (Stance != previousStance)
+    {
+        previousStance = Stance;
+        Display();
     }
 
     // Given the order of the checks here, we only check the timeout if the transitions are enabled
@@ -1386,9 +1394,9 @@ void loop()
     {
         // We have exceeded the time to do a transition start.
         // Auto Disable the safety so we don't accidentally trigger the transition.
-        enableCommandTransitions = false;
+        enableRollCodeTransitions = false;
         SetBacklightColor(BLUE);
-        //DEBUG_PRINT_LN("Warning: Transition Enable Timeout reached.  Disabling Command Transitions.");
+        //DEBUG_PRINT_LN("Warning: Transition Enable Timeout reached.  Disabling Rolling Code Transitions.");
     }
 
     Move();
@@ -1399,7 +1407,7 @@ void loop()
     if (Stance == StanceTarget)
     {
         // Transition complete!
-        StanceTarget = 0;
+        StanceTarget = STANCE_NO_TARGET;
         DEBUG_PRINT_LN("Transition Complete");
     }
 
