@@ -56,8 +56,15 @@
 #include "display.h"
 #include <USBSabertooth.h>
 
+///////////////////////////////////////////////////////////////////////////////
 // Sabertooth setup
-USBSabertoothSerial C;
+// On ESP32 with USB CDC on boot, Serial = USB and Serial0 = UART0 (TX0/RX0 pins).
+// On Pro Micro (ATmega32U4), Serial = USB and Serial1 = the only hardware UART.
+#ifdef USE_WAVESHARE_ESP32_LCD
+    USBSabertoothSerial C(Serial0);
+#else
+    USBSabertoothSerial C(Serial1);
+#endif
 USBSabertooth       ST(C, 128);              // Use address 128.
 
 // Control Mode - Rolling Code Remote
@@ -155,14 +162,18 @@ void setup()
         pinMode(ROLLING_CODE_BUTTON_D_PIN, INPUT_PULLUP);
     #endif //ENABLE_ROLLING_CODE_TRIGGER
 
-    // The Sabertooth library uses the Serial TX pin to send data to the motor controller
-    SabertoothTXPinSerial.begin(9600); // 9600 is the default baud rate for Sabertooth Packet Serial.
+    // Initialize the Sabertooth serial port (UART0 on ESP32, UART1 on Pro Micro)
+    #ifdef USE_WAVESHARE_ESP32_LCD
+        Serial0.begin(9600); // UART0 TX0/RX0 pins on Waveshare ESP32
+    #else
+        Serial1.begin(9600); // Hardware UART TX/RX pins on Pro Micro
+    #endif
 
     // Setup the USB Serial Port for debug output.
     #ifdef USE_WAVESHARE_ESP32_LCD
-        Serial.begin(115200); // This is the USB Port on the Waveshare ESP32-C6.
+        Serial.begin(115200); // USB CDC on the Waveshare ESP32
     #else
-        Serial.begin(9600); // This is the USB Port on a Pro Micro.
+        Serial.begin(9600); // USB on Pro Micro
     #endif
 
     // Initialize the display

@@ -1,6 +1,7 @@
 #ifndef CONFIG_H
 #define CONFIG_H
 
+///////////////////////////////////////////////////////////////////////////////
 // Hardware Configuration
 // Choose ONE of the following hardware configurations:
 // Option 1: Waveshare ESP32-C6-LCD-1.47 (172x320 TFT, ST7789, 1x WS2812 LED)
@@ -17,16 +18,8 @@
     #define USE_WAVESHARE_ESP32_LCD
 #endif
 
-// For ESP32, use Serial1 for Sabertooth instead of the USB CDC Serial port
-#ifdef ESP32
-    #define USBCON // Define USBCON to use Serial1 for Sabertooth on ESP32
-#endif
-
-/////
+///////////////////////////////////////////////////////////////////////////////
 // Pin Definitions
-// Define the pins that we use. Gives a single place to change them if desired.
-/////
-
 #ifdef USE_WAVESHARE_ESP32_C6_LCD
     // Valid input pins on the Waveshare ESP32-C6 LCD are 0,1,2,3,4,18,19,20,23.
     // The rest are used for the SD/LCD/UART or not recommended for other reasons.
