@@ -55,15 +55,22 @@ class DisplayManager
         // Display transition message
         void showTransition(int stanceTarget);
 
+        // Show rolling code enabled/disabled status indicator (Waveshare TFT only)
+        void showRollCodeEnabled(bool enabled);
+
     private:
         #ifdef USE_WAVESHARE_ESP32_LCD
             // Waveshare ESP32 display objects
             Adafruit_ST7789* tft;
             CRGB* leds;
             char lcdText[256];
+            bool rollCodeEnabled;
 
             // Internal text setter for Waveshare
             void setLCDText(const char* message);
+
+            // Draw the roll code indicator circle
+            void drawRollCodeIndicator();
         #else
             // Arduino Pro Micro LCD shield object
             Adafruit_RGBLCDShield* lcd;

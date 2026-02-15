@@ -12,6 +12,7 @@ DisplayManager::DisplayManager()
         tft = new Adafruit_ST7789(TFT_CS, TFT_DC, TFT_RST);
         leds = new CRGB[NUM_LEDS];
         lcdText[0] = '\0';
+        rollCodeEnabled = false;
     #else
         lcd = new Adafruit_RGBLCDShield();
     #endif
@@ -69,8 +70,9 @@ void DisplayManager::setBacklightColor(int color)
             tft->setTextColor(ST77XX_WHITE, color);
             lastColor = color;
 
-            // Since the screen is cleared when we change the backlight color, we need to redraw the existing text.
+            // Since the screen is cleared when we change the backlight color, we need to redraw the existing text and indicators.
             setLCDText(lcdText);
+            drawRollCodeIndicator();
         }
 
         leds[0] = CRGB::Black;
@@ -189,6 +191,23 @@ void DisplayManager::showTransition(int stanceTarget)
     #endif
 }
 
+void DisplayManager::showRollCodeEnabled(bool enabled)
+{
+    #ifdef USE_WAVESHARE_ESP32_LCD
+        rollCodeEnabled = enabled;
+        drawRollCodeIndicator();
+    #else
+        if (enabled)
+        {
+            lcd->setBacklight(VIOLET);
+        }
+        else
+        {
+            lcd->setBacklight(BLUE);
+        }
+    #endif
+}
+
 #ifdef USE_WAVESHARE_ESP32_LCD
     void DisplayManager::setLCDText(const char* message)
     {
@@ -213,6 +232,25 @@ void DisplayManager::showTransition(int stanceTarget)
                 tft->print(lineStart);
                 break;
             }
+        }
+    }
+
+    void DisplayManager::drawRollCodeIndicator()
+    {
+        int screenWidth = tft->width();
+        int screenHeight = tft->height();
+        int radius = 18;
+        int cx = screenWidth - radius - 8;
+        int cy = screenHeight - radius - 8;
+
+        if (rollCodeEnabled)
+        {
+            tft->fillCircle(cx, cy, radius, VIOLET);
+        }
+        else
+        {
+            // Draw circle in background color to hide it
+            tft->fillCircle(cx, cy, radius, lastColor);
         }
     }
 #endif

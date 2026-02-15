@@ -111,7 +111,7 @@ bool killDebugSent = false;
 
 // Button detection and debounce for the rolling code remote
 #ifdef ENABLE_ROLLING_CODE_TRIGGER
-    #define BUTTON_DEBOUNCE_TIME 500
+    #define BUTTON_DEBOUNCE_TIME 150
     int buttonALastState;
     int buttonBLastState;
     int buttonCLastState;
@@ -204,64 +204,53 @@ void ReadRollingCodeTrigger()
 
         // Button A: Toggle rolling code transitions enable/disable.
         // Only triggers on the rising edge (LOW -> HIGH transition).
-        if (now >= buttonATimeout)
+        if (now >= buttonATimeout && rollCodeA == HIGH && buttonALastState == LOW)
         {
-            if (rollCodeA == HIGH && buttonALastState == LOW)
+            buttonATimeout = now + BUTTON_DEBOUNCE_TIME;
+            if (!enableRollCodeTransitions)
             {
-                buttonATimeout = now + BUTTON_DEBOUNCE_TIME;
-                if (!enableRollCodeTransitions)
-                {
-                    enableRollCodeTransitions = true;
-                    killDebugSent = false;
-                    rollCodeTransitionTimeout = now + COMMAND_ENABLE_TIMEOUT;
-                    display.setBacklightColor(VIOLET);
-                    DEBUG_PRINT_LN("Rolling Code Transmitter Transitions Enabled");
-                }
-                else
-                {
-                    enableRollCodeTransitions = false;
-                    killDebugSent = false;
-                    display.setBacklightColor(BLUE);
-                    DEBUG_PRINT_LN("Rolling Code Transmitter Transitions Disabled");
-                }
+                enableRollCodeTransitions = true;
+                killDebugSent = false;
+                rollCodeTransitionTimeout = now + COMMAND_ENABLE_TIMEOUT;
+                display.showRollCodeEnabled(true);
+                DEBUG_PRINT_LN("Rolling Code Transmitter Transitions Enabled");
             }
-            buttonALastState = rollCodeA;
+            else
+            {
+                enableRollCodeTransitions = false;
+                killDebugSent = false;
+                display.showRollCodeEnabled(false);
+                DEBUG_PRINT_LN("Rolling Code Transmitter Transitions Disabled");
+            }
         }
+        // Always track the actual signal state so edges aren't missed during debounce
+        buttonALastState = rollCodeA;
 
         // Button B: Transition to three leg stance.
-        if (now >= buttonBTimeout)
+        if (now >= buttonBTimeout && enableRollCodeTransitions && rollCodeB == HIGH && buttonBLastState == LOW)
         {
-            if (enableRollCodeTransitions && rollCodeB == HIGH && buttonBLastState == LOW)
-            {
-                buttonBTimeout = now + BUTTON_DEBOUNCE_TIME;
-                StanceTarget = THREE_LEG_STANCE;
-                DEBUG_PRINT_LN("Moving to Three Leg Stance.");
-            }
-            buttonBLastState = rollCodeB;
+            buttonBTimeout = now + BUTTON_DEBOUNCE_TIME;
+            StanceTarget = THREE_LEG_STANCE;
+            DEBUG_PRINT_LN("Moving to Three Leg Stance.");
         }
+        buttonBLastState = rollCodeB;
 
         // Button C: Transition to two leg stance.
-        if (now >= buttonCTimeout)
+        if (now >= buttonCTimeout && enableRollCodeTransitions && rollCodeC == HIGH && buttonCLastState == LOW)
         {
-            if (enableRollCodeTransitions && rollCodeC == HIGH && buttonCLastState == LOW)
-            {
-                buttonCTimeout = now + BUTTON_DEBOUNCE_TIME;
-                StanceTarget = TWO_LEG_STANCE;
-                DEBUG_PRINT_LN("Moving to Two Leg Stance.");
-            }
-            buttonCLastState = rollCodeC;
+            buttonCTimeout = now + BUTTON_DEBOUNCE_TIME;
+            StanceTarget = TWO_LEG_STANCE;
+            DEBUG_PRINT_LN("Moving to Two Leg Stance.");
         }
+        buttonCLastState = rollCodeC;
 
         // Button D: Reserved for future use.
-        if (now >= buttonDTimeout)
+        if (now >= buttonDTimeout && enableRollCodeTransitions && rollCodeD == HIGH && buttonDLastState == LOW)
         {
-            if (enableRollCodeTransitions && rollCodeD == HIGH && buttonDLastState == LOW)
-            {
-                buttonDTimeout = now + BUTTON_DEBOUNCE_TIME;
-                DEBUG_PRINT_LN("Button D Pressed");
-            }
-            buttonDLastState = rollCodeD;
+            buttonDTimeout = now + BUTTON_DEBOUNCE_TIME;
+            DEBUG_PRINT_LN("Button D Pressed");
         }
+        buttonDLastState = rollCodeD;
 
     #endif
 }
@@ -840,7 +829,7 @@ void loop()
         // We have exceeded the time to do a transition start.
         // Auto Disable the safety so we don't accidentally trigger the transition.
         enableRollCodeTransitions = false;
-        display.setBacklightColor(BLUE);
+        display.showRollCodeEnabled(false);
         //DEBUG_PRINT_LN("Warning: Transition Enable Timeout reached.  Disabling Rolling Code Transitions.");
     }
 
