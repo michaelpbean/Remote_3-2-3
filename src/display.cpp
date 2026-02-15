@@ -21,13 +21,23 @@ void DisplayManager::begin()
 {
     #ifdef USE_WAVESHARE_ESP32_LCD
         pinMode(TFT_BL, OUTPUT);
-        digitalWrite(TFT_BL, HIGH);   // Enable backlight
+        #ifdef USE_WAVESHARE_ESP32_C6_LCD
+            digitalWrite(TFT_BL, HIGH);   // Enable backlight
+        #elif defined(USE_WAVESHARE_ESP32_S3_LCD)
+            digitalWrite(TFT_BL, LOW);   // Enable backlight on S3 LCD (inverted logic)
+        #endif
 
         // Initialize SPI with our pins
         SPI.begin(TFT_SCLK, -1, TFT_MOSI, TFT_CS);
 
-        // Initialize for 172x320
-        tft->init(172, 320);
+        // Initialize display with appropriate resolution for each board
+        #ifdef USE_WAVESHARE_ESP32_C6_LCD
+            // ESP32-C6-LCD-1.47: 172x320
+            tft->init(172, 320);
+        #elif defined(USE_WAVESHARE_ESP32_S3_LCD)
+            // ESP32-S3-LCD-1.9: 170x320
+            tft->init(170, 320);
+        #endif
         tft->setRotation(1);
 
         tft->setTextColor(ST77XX_WHITE, ST77XX_BLUE);
