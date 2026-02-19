@@ -55,6 +55,10 @@
 #include "config.h"
 #include "display.h"
 #include <USBSabertooth.h>
+#ifdef USE_WAVESHARE_ESP32_LCD
+    #include "settings.h"
+    #include "webconfig.h"
+#endif
 
 ///////////////////////////////////////////////////////////////////////////////
 // Sabertooth setup
@@ -74,9 +78,37 @@ USBSabertooth       ST(C, 128);              // Use address 128.
 // Display Manager
 DisplayManager display;
 
-// Timing Variables
-const int StanceInterval = 100;
-const int ShowTimeInterval = 100;
+// Settings Manager and Web Config Server (ESP32 only)
+#ifdef USE_WAVESHARE_ESP32_LCD
+    SettingsManager settingsManager;
+    WebConfigServer webConfig(settingsManager);
+
+    // Independent single-motor web move (runs alongside StanceTarget system)
+    enum WebMoveActive
+    {
+        WEB_MOVE_NONE = 0,
+        WEB_MOVE_LEG_UP,
+        WEB_MOVE_LEG_DN,
+        WEB_MOVE_TILT_UP,
+        WEB_MOVE_TILT_DN
+    };
+    WebMoveActive webMoveActive = WEB_MOVE_NONE;
+#endif
+
+// Motor power variables (populated from settings on ESP32, hardcoded on Pro Micro)
+int moveLegDnPower;
+int moveLegUpPower;
+int moveTiltDnPower;
+int moveTiltUpPower;
+int twoToThreeLegPower;
+int twoToThreeTiltPower;
+int threeToTwoLegSlowPower;
+int threeToTwoLegFastPower;
+int threeToTwoTiltPower;
+
+// Timing Variables (populated from settings on ESP32, hardcoded on Pro Micro)
+int StanceInterval;
+int ShowTimeInterval;
 unsigned long currentMillis = 0;      // stores the value of millis() in each iteration of loop()
 unsigned long PreviousStanceMillis = 0;
 unsigned long PreviousShowTimeMillis = 0;
@@ -113,12 +145,17 @@ int rollCodeC;
 int rollCodeD;
 bool enableRollCodeTransitions = false;
 unsigned long rollCodeTransitionTimeout; // Used to auto disable the enable signal after a set time
-#define COMMAND_ENABLE_TIMEOUT 30000 // Default timeout of 30 seconds for performing a transition.
+unsigned long commandEnableTimeout;
 bool killDebugSent = false;
 
 // Button detection and debounce for the rolling code remote
 #ifdef ENABLE_ROLLING_CODE_TRIGGER
-    #define BUTTON_DEBOUNCE_TIME 150
+    unsigned long buttonDebounceTime;
+
+    // ThreeToTwo phase timing (ShowTime tick counts)
+    int phase1Start;
+    int phase1End;
+    int phase2Start;
     int buttonALastState;
     int buttonBLastState;
     int buttonCLastState;
@@ -128,6 +165,12 @@ bool killDebugSent = false;
     unsigned long buttonCTimeout;
     unsigned long buttonDTimeout;
 #endif
+
+// Scale a motor power value by a percentage (0-100). Preserves sign.
+int ScalePower(int power, int percent)
+{
+    return (int)((long)power * percent / 100);
+}
 
 // Debug Print stuff
 #define DEBUG
@@ -179,6 +222,52 @@ void setup()
     // Initialize the display
     display.begin();
 
+    // Load settings and start WiFi config server (ESP32 only)
+    #ifdef USE_WAVESHARE_ESP32_LCD
+        settingsManager.Load();
+        webConfig.Begin();
+
+        // Populate motor power variables from saved settings, scaled by power multiplier
+        int pct = settingsManager.settings.powerMultiplier;
+        moveLegDnPower         = ScalePower(settingsManager.settings.moveLegDnPower, pct);
+        moveLegUpPower         = ScalePower(settingsManager.settings.moveLegUpPower, pct);
+        moveTiltDnPower        = ScalePower(settingsManager.settings.moveTiltDnPower, pct);
+        moveTiltUpPower        = ScalePower(settingsManager.settings.moveTiltUpPower, pct);
+        twoToThreeLegPower     = ScalePower(settingsManager.settings.twoToThreeLegPower, pct);
+        twoToThreeTiltPower    = ScalePower(settingsManager.settings.twoToThreeTiltPower, pct);
+        threeToTwoLegSlowPower = ScalePower(settingsManager.settings.threeToTwoLegSlowPower, pct);
+        threeToTwoLegFastPower = ScalePower(settingsManager.settings.threeToTwoLegFastPower, pct);
+        threeToTwoTiltPower    = ScalePower(settingsManager.settings.threeToTwoTiltPower, pct);
+
+        // Populate timing variables from saved settings
+        StanceInterval         = settingsManager.settings.stanceInterval;
+        ShowTimeInterval       = settingsManager.settings.showTimeInterval;
+        commandEnableTimeout   = settingsManager.settings.commandEnableTimeout;
+        buttonDebounceTime     = settingsManager.settings.buttonDebounceTime;
+        phase1Start            = settingsManager.settings.phase1Start;
+        phase1End              = settingsManager.settings.phase1End;
+        phase2Start            = settingsManager.settings.phase2Start;
+    #else
+        // Arduino Pro Micro: use shared compiled defaults
+        moveLegDnPower         = DEFAULT_MOVE_LEG_DN_POWER;
+        moveLegUpPower         = DEFAULT_MOVE_LEG_UP_POWER;
+        moveTiltDnPower        = DEFAULT_MOVE_TILT_DN_POWER;
+        moveTiltUpPower        = DEFAULT_MOVE_TILT_UP_POWER;
+        twoToThreeLegPower     = DEFAULT_TWO_TO_THREE_LEG_POWER;
+        twoToThreeTiltPower    = DEFAULT_TWO_TO_THREE_TILT_POWER;
+        threeToTwoLegSlowPower = DEFAULT_THREE_TO_TWO_LEG_SLOW_POWER;
+        threeToTwoLegFastPower = DEFAULT_THREE_TO_TWO_LEG_FAST_POWER;
+        threeToTwoTiltPower    = DEFAULT_THREE_TO_TWO_TILT_POWER;
+
+        StanceInterval         = DEFAULT_STANCE_INTERVAL;
+        ShowTimeInterval       = DEFAULT_SHOWTIME_INTERVAL;
+        commandEnableTimeout   = DEFAULT_COMMAND_ENABLE_TIMEOUT;
+        buttonDebounceTime     = DEFAULT_BUTTON_DEBOUNCE_TIME;
+        phase1Start            = DEFAULT_PHASE1_START;
+        phase1End              = DEFAULT_PHASE1_END;
+        phase2Start            = DEFAULT_PHASE2_START;
+    #endif
+
     // Setup the Target as no-target to begin.
     StanceTarget = STANCE_NO_TARGET;
 }
@@ -217,12 +306,12 @@ void ReadRollingCodeTrigger()
         // Only triggers on the rising edge (LOW -> HIGH transition).
         if (now >= buttonATimeout && rollCodeA == HIGH && buttonALastState == LOW)
         {
-            buttonATimeout = now + BUTTON_DEBOUNCE_TIME;
+            buttonATimeout = now + buttonDebounceTime;
             if (!enableRollCodeTransitions)
             {
                 enableRollCodeTransitions = true;
                 killDebugSent = false;
-                rollCodeTransitionTimeout = now + COMMAND_ENABLE_TIMEOUT;
+                rollCodeTransitionTimeout = now + commandEnableTimeout;
                 display.showRollCodeEnabled(true);
                 DEBUG_PRINT_LN("Rolling Code Transmitter Transitions Enabled");
             }
@@ -240,7 +329,7 @@ void ReadRollingCodeTrigger()
         // Button B: Transition to three leg stance.
         if (now >= buttonBTimeout && enableRollCodeTransitions && rollCodeB == HIGH && buttonBLastState == LOW)
         {
-            buttonBTimeout = now + BUTTON_DEBOUNCE_TIME;
+            buttonBTimeout = now + buttonDebounceTime;
             StanceTarget = THREE_LEG_STANCE;
             DEBUG_PRINT_LN("Moving to Three Leg Stance.");
         }
@@ -249,7 +338,7 @@ void ReadRollingCodeTrigger()
         // Button C: Transition to two leg stance.
         if (now >= buttonCTimeout && enableRollCodeTransitions && rollCodeC == HIGH && buttonCLastState == LOW)
         {
-            buttonCTimeout = now + BUTTON_DEBOUNCE_TIME;
+            buttonCTimeout = now + buttonDebounceTime;
             StanceTarget = TWO_LEG_STANCE;
             DEBUG_PRINT_LN("Moving to Two Leg Stance.");
         }
@@ -258,7 +347,7 @@ void ReadRollingCodeTrigger()
         // Button D: Reserved for future use.
         if (now >= buttonDTimeout && enableRollCodeTransitions && rollCodeD == HIGH && buttonDLastState == LOW)
         {
-            buttonDTimeout = now + BUTTON_DEBOUNCE_TIME;
+            buttonDTimeout = now + buttonDebounceTime;
             DEBUG_PRINT_LN("Button D Pressed");
         }
         buttonDLastState = rollCodeD;
@@ -329,7 +418,7 @@ void MoveLegDn()
     // the switch is closed.
     if (LegDn == HIGH)
     {
-        ST.motor(1, 1024);  // Go forward at half power.
+        ST.motor(1, moveLegDnPower);
     }
 }
 
@@ -355,7 +444,7 @@ void MoveLegUp()
     // the switch is closed.
     if (LegUp == HIGH)
     {
-        ST.motor(1, -2047);  // Go backwards at full power.
+        ST.motor(1, moveLegUpPower);
     }
 }
 
@@ -381,7 +470,7 @@ void MoveTiltDn()
     // the switch is closed.
     if (TiltDn == HIGH)
     {
-        ST.motor(2, 2047);  // Go forward at full power.
+        ST.motor(2, moveTiltDnPower);
     }
 }
 
@@ -407,7 +496,7 @@ void MoveTiltUp()
     // the switch is closed.
     if (TiltUp == HIGH)
     {
-        ST.motor(2, -2047);  // Go forward at full power.
+        ST.motor(2, moveTiltUpPower);
     }
 }
 
@@ -436,8 +525,8 @@ void TwoToThree()
     }
     else if (LegDn == HIGH)
     {
-        // If the leg is not down, move the leg motor at full power.
-        ST.motor(1, 1024);  // Go forward at half power.
+        // If the leg is not down, move the leg motor.
+        ST.motor(1, twoToThreeLegPower);
     }
 
     // If the Body is already tilted, we are done.
@@ -448,8 +537,8 @@ void TwoToThree()
     }
     else if (TiltDn == HIGH)
     {
-        // If the body is not tilted, move the tilt motor at full power.
-        ST.motor(2, 2047);  // Go forward at full power.
+        // If the body is not tilted, move the tilt motor.
+        ST.motor(2, twoToThreeTiltPower);
     }
 }
 
@@ -483,15 +572,15 @@ void ThreeToTwo()
     // If leg up is open AND the timer is in the first 20 steps then lift the center leg at 25 percent speed
     // The intent here is to move the leg slowly so that it pushes the body up until we have reached the balance
     // point for two leg stance.  After that point we can pull the leg up quickly.
-    if (LegUp == HIGH &&  ShowTime >= 1 && ShowTime <= 10)
+    if (LegUp == HIGH && ShowTime >= phase1Start && ShowTime <= phase1End)
     {
-        ST.motor(1, -250);
+        ST.motor(1, threeToTwoLegSlowPower);
     }
 
-    //  If leg up is open AND the timer is over 12 steps then lift the center leg at full speed
-    if (LegUp == HIGH && ShowTime >= 12)
+    //  If leg up is open AND the timer is past the phase 2 start then lift the center leg at full speed
+    if (LegUp == HIGH && ShowTime >= phase2Start)
     {
-        ST.motor(1, -2047);
+        ST.motor(1, threeToTwoLegFastPower);
     }
 
     // at the same time, tilt up till the switch is closed
@@ -502,7 +591,7 @@ void ThreeToTwo()
     }
     if (TiltUp == HIGH)
     {
-        ST.motor(2, -2047);  // Go backward at full power.
+        ST.motor(2, threeToTwoTiltPower);
     }
 }
 
@@ -816,6 +905,55 @@ void loop()
     // The assumption is that if you hit the killswitch, it was for a good reason.
     //checkKillSwitch();
 
+    // Process web commands
+    #ifdef USE_WAVESHARE_ESP32_LCD
+        if (webConfig.pendingCommand != WEB_CMD_NONE)
+        {
+            WebCommand cmd = webConfig.pendingCommand;
+            webConfig.pendingCommand = WEB_CMD_NONE;
+
+            switch (cmd)
+            {
+                case WEB_CMD_TWO_TO_THREE:
+                    webMoveActive = WEB_MOVE_NONE;
+                    StanceTarget = THREE_LEG_STANCE;
+                    DEBUG_PRINT_LN("Web: Moving to Three Leg Stance.");
+                    break;
+                case WEB_CMD_THREE_TO_TWO:
+                    webMoveActive = WEB_MOVE_NONE;
+                    StanceTarget = TWO_LEG_STANCE;
+                    DEBUG_PRINT_LN("Web: Moving to Two Leg Stance.");
+                    break;
+                case WEB_CMD_MOVE_LEG_UP:
+                    webMoveActive = WEB_MOVE_LEG_UP;
+                    LegMoving = true;
+                    DEBUG_PRINT_LN("Web: Moving Leg Up.");
+                    break;
+                case WEB_CMD_MOVE_LEG_DN:
+                    webMoveActive = WEB_MOVE_LEG_DN;
+                    LegMoving = true;
+                    DEBUG_PRINT_LN("Web: Moving Leg Down.");
+                    break;
+                case WEB_CMD_MOVE_TILT_UP:
+                    webMoveActive = WEB_MOVE_TILT_UP;
+                    TiltMoving = true;
+                    DEBUG_PRINT_LN("Web: Moving Tilt Up.");
+                    break;
+                case WEB_CMD_MOVE_TILT_DN:
+                    webMoveActive = WEB_MOVE_TILT_DN;
+                    TiltMoving = true;
+                    DEBUG_PRINT_LN("Web: Moving Tilt Down.");
+                    break;
+                case WEB_CMD_EMERGENCY_STOP:
+                    webMoveActive = WEB_MOVE_NONE;
+                    EmergencyStop();
+                    break;
+                default:
+                    break;
+            }
+        }
+    #endif
+
     // Read rolling code buttons and limit switches every loop iteration.
     // These are instant digitalRead() calls and should not be throttled.
     ReadRollingCodeTrigger(); // Only does something if ENABLE_ROLLING_CODE_TRIGGER is defined.
@@ -844,7 +982,44 @@ void loop()
         //DEBUG_PRINT_LN("Warning: Transition Enable Timeout reached.  Disabling Rolling Code Transitions.");
     }
 
-    Move();
+    // Drive individual web-commanded motor moves each loop iteration.
+    // These run independently from the StanceTarget/Move() system.
+    // Each move function reads its limit switch and stops the motor when reached.
+    #ifdef USE_WAVESHARE_ESP32_LCD
+        if (webMoveActive != WEB_MOVE_NONE)
+        {
+            switch (webMoveActive)
+            {
+                case WEB_MOVE_LEG_UP:
+                    MoveLegUp();
+                    if (!LegMoving) webMoveActive = WEB_MOVE_NONE;
+                    break;
+                case WEB_MOVE_LEG_DN:
+                    MoveLegDn();
+                    if (!LegMoving) webMoveActive = WEB_MOVE_NONE;
+                    break;
+                case WEB_MOVE_TILT_UP:
+                    MoveTiltUp();
+                    if (!TiltMoving) webMoveActive = WEB_MOVE_NONE;
+                    break;
+                case WEB_MOVE_TILT_DN:
+                    MoveTiltDn();
+                    if (!TiltMoving) webMoveActive = WEB_MOVE_NONE;
+                    break;
+                default:
+                    break;
+            }
+        }
+    #endif
+
+    // Skip Move() while an independent web move is active, since Move() would
+    // stop motors and clear Moving flags when StanceTarget is STANCE_NO_TARGET.
+    #ifdef USE_WAVESHARE_ESP32_LCD
+        if (webMoveActive == WEB_MOVE_NONE)
+            Move();
+    #else
+        Move();
+    #endif
 
     // Once we have moved, check to see if we've reached the target.
     // If we have then we reset the Target, so that we don't keep
@@ -864,4 +1039,32 @@ void loop()
         ShowTime++;
         //DEBUG_PRINT("Showtime: ");DEBUG_PRINT_LN(ShowTime);
     }
+
+    #ifdef USE_WAVESHARE_ESP32_LCD
+        webConfig.HandleClient();
+
+        // Apply pending settings when motors are idle
+        if (settingsManager.pendingApply && !LegMoving && !TiltMoving)
+        {
+            int pct = settingsManager.settings.powerMultiplier;
+            moveLegDnPower         = ScalePower(settingsManager.settings.moveLegDnPower, pct);
+            moveLegUpPower         = ScalePower(settingsManager.settings.moveLegUpPower, pct);
+            moveTiltDnPower        = ScalePower(settingsManager.settings.moveTiltDnPower, pct);
+            moveTiltUpPower        = ScalePower(settingsManager.settings.moveTiltUpPower, pct);
+            twoToThreeLegPower     = ScalePower(settingsManager.settings.twoToThreeLegPower, pct);
+            twoToThreeTiltPower    = ScalePower(settingsManager.settings.twoToThreeTiltPower, pct);
+            threeToTwoLegSlowPower = ScalePower(settingsManager.settings.threeToTwoLegSlowPower, pct);
+            threeToTwoLegFastPower = ScalePower(settingsManager.settings.threeToTwoLegFastPower, pct);
+            threeToTwoTiltPower    = ScalePower(settingsManager.settings.threeToTwoTiltPower, pct);
+            StanceInterval         = settingsManager.settings.stanceInterval;
+            ShowTimeInterval       = settingsManager.settings.showTimeInterval;
+            commandEnableTimeout   = settingsManager.settings.commandEnableTimeout;
+            buttonDebounceTime     = settingsManager.settings.buttonDebounceTime;
+            phase1Start            = settingsManager.settings.phase1Start;
+            phase1End              = settingsManager.settings.phase1End;
+            phase2Start            = settingsManager.settings.phase2Start;
+            settingsManager.pendingApply = false;
+            Serial.println("Settings applied.");
+        }
+    #endif
 }

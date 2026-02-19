@@ -19,6 +19,40 @@
 #endif
 
 ///////////////////////////////////////////////////////////////////////////////
+// WiFi Access Point Configuration (ESP32 only)
+#ifdef USE_WAVESHARE_ESP32_LCD
+    #define WIFI_AP_SSID     "R2-323"
+    #define WIFI_AP_PASSWORD "tiltdroid"
+#endif
+
+///////////////////////////////////////////////////////////////////////////////
+// Default Controller Values
+// Motor power values (-2047 to 2047)
+#define DEFAULT_MOVE_LEG_DN_POWER            1024
+#define DEFAULT_MOVE_LEG_UP_POWER           -2047
+#define DEFAULT_MOVE_TILT_DN_POWER           2047
+#define DEFAULT_MOVE_TILT_UP_POWER          -2047
+#define DEFAULT_TWO_TO_THREE_LEG_POWER       1024
+#define DEFAULT_TWO_TO_THREE_TILT_POWER      2047
+#define DEFAULT_THREE_TO_TWO_LEG_SLOW_POWER  -250
+#define DEFAULT_THREE_TO_TWO_LEG_FAST_POWER -2047
+#define DEFAULT_THREE_TO_TWO_TILT_POWER     -2047
+
+// Timing values (milliseconds)
+#define DEFAULT_STANCE_INTERVAL              100
+#define DEFAULT_SHOWTIME_INTERVAL            100
+#define DEFAULT_COMMAND_ENABLE_TIMEOUT       30000
+#define DEFAULT_BUTTON_DEBOUNCE_TIME         150
+
+// Global power multiplier (percentage 0-100)
+#define DEFAULT_POWER_MULTIPLIER             100
+
+// ThreeToTwo phase timing (in ShowTime ticks)
+#define DEFAULT_PHASE1_START                 1
+#define DEFAULT_PHASE1_END                   10
+#define DEFAULT_PHASE2_START                 12
+
+///////////////////////////////////////////////////////////////////////////////
 // Pin Definitions
 #ifdef USE_WAVESHARE_ESP32_C6_LCD
     // Valid input pins on the Waveshare ESP32-C6 LCD are 0,1,2,3,4,18,19,20,23.
