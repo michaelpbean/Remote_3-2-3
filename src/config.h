@@ -5,10 +5,10 @@
 // Hardware Configuration
 // Choose ONE of the following hardware configurations:
 // Option 1: Waveshare ESP32-C6-LCD-1.47 (172x320 TFT, ST7789, 1x WS2812 LED)
-#define USE_WAVESHARE_ESP32_C6_LCD
+//#define USE_WAVESHARE_ESP32_C6_LCD
 
 // Option 2: Waveshare ESP32-S3-LCD-1.9 (170x320 TFT, ST7789, 2x WS2812 LEDs)
-//#define USE_WAVESHARE_ESP32_S3_LCD
+#define USE_WAVESHARE_ESP32_S3_LCD
 
 // Option 3: Arduino Pro Micro + Adafruit RGB LCD Shield (16x2 character LCD)
 //#define USE_ARDUINO_PRO_MICRO
@@ -79,16 +79,19 @@
     #define RGB_PIN   8 // GPIO pin where the WS2812 RGB LED is connected
 #elif defined(USE_WAVESHARE_ESP32_S3_LCD)
     // Waveshare ESP32-S3-LCD-1.9 pin assignments
-    // Valid input pins on the Waveshare ESP32-S3 LCD are 1,2,3,5,6,15,16,17,18,21,42,45,46.
+    // Valid input pins on the Waveshare ESP32-S3 LCD are 1,2,5,6,16,17,18,21,38,42
+    // SD - 39,40,41 (available if SD card not used)
+    // I2C SDA/SCL - 47,48 (IMU use these)
+    // Stapping pins - 0,3,45,46 - don't use for inputs to avoid boot issuess
     // The rest are used for the SD/LCD/UART/IMU or not recommended for other reasons.    
     #define TiltUpPin 1   //Limit switch input pin, Grounded when closed
     #define TiltDnPin 2   //Limit switch input pin, Grounded when closed
-    #define LegUpPin  3   //Limit switch input pin, Grounded when closed
-    #define LegDnPin  5   //Limit switch input pin, Grounded when closed
-    #define ROLLING_CODE_BUTTON_A_PIN 15 // Used as a killswitch / activate button
-    #define ROLLING_CODE_BUTTON_B_PIN 16 // Transition between 2 and 3 legs.
-    #define ROLLING_CODE_BUTTON_C_PIN 17 // Transition between 3 and 2 legs.
-    #define ROLLING_CODE_BUTTON_D_PIN 18 // Reserved for future use
+    #define LegUpPin  5   //Limit switch input pin, Grounded when closed
+    #define LegDnPin  6   //Limit switch input pin, Grounded when closed
+    #define ROLLING_CODE_BUTTON_A_PIN 16 // Used as a killswitch / activate button
+    #define ROLLING_CODE_BUTTON_B_PIN 17 // Transition between 2 and 3 legs.
+    #define ROLLING_CODE_BUTTON_C_PIN 18 // Transition between 3 and 2 legs.
+    #define ROLLING_CODE_BUTTON_D_PIN 21
 
     // TFT display pin definitions for Waveshare ESP32-S3-LCD-1.9
     #define TFT_MOSI  13   // LCD_DIN

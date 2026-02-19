@@ -75,33 +75,38 @@ void DisplayManager::setBacklightColor(int color)
             drawRollCodeIndicator();
         }
 
-        leds[0] = CRGB::Black;
+        CRGB ledColor = CRGB::Black;
         switch (color)
         {
             case OFF:
-                leds[0] = CRGB::Black;
+                ledColor = CRGB::Black;
                 break;
             case RED:
-                leds[0] = CRGB::Red;
+                ledColor = CRGB::Red;
                 break;
             case YELLOW:
-                leds[0] = CRGB::Yellow;
+                ledColor = CRGB::Yellow;
                 break;
             case GREEN:
-                leds[0] = CRGB::Green;
+                ledColor = CRGB::Green;
                 break;
             case TEAL:
-                leds[0] = CRGB::Cyan;
+                ledColor = CRGB::Cyan;
                 break;
             case BLUE:
-                leds[0] = CRGB::Blue;
+                ledColor = CRGB::Blue;
                 break;
             case VIOLET:
-                leds[0] = CRGB::Purple;
+                ledColor = CRGB::Purple;
                 break;
             case WHITE:
-                leds[0] = CRGB::White;
+                ledColor = CRGB::White;
                 break;
+        }
+
+        for (int i = 0; i < NUM_LEDS; i++)
+        {
+            leds[i] = ledColor;
         }
         FastLED.show();
     #else
