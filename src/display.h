@@ -58,6 +58,9 @@ class DisplayManager
         // Show rolling code enabled/disabled status indicator (Waveshare TFT only)
         void showRollCodeEnabled(bool enabled);
 
+        // Show current tilt angle in degrees (Waveshare TFT only)
+        void showTiltAngle(float angleDeg, bool valid);
+
     private:
         #ifdef USE_WAVESHARE_ESP32_LCD
             // Waveshare ESP32 display objects
@@ -65,12 +68,17 @@ class DisplayManager
             CRGB* leds;
             char lcdText[256];
             bool rollCodeEnabled;
+            float lastTiltAngleDeg;
+            bool lastTiltValid;
 
             // Internal text setter for Waveshare
             void setLCDText(const char* message);
 
             // Draw the roll code indicator circle
             void drawRollCodeIndicator();
+
+            // Draw tilt angle overlay
+            void drawTiltOverlay();
         #else
             // Arduino Pro Micro LCD shield object
             Adafruit_RGBLCDShield* lcd;

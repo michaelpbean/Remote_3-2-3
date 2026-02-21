@@ -55,6 +55,9 @@
 #include "config.h"
 #include "display.h"
 #include <USBSabertooth.h>
+#ifdef USE_WAVESHARE_ESP32_S3_LCD
+    #include <Wire.h>
+#endif
 #ifdef USE_WAVESHARE_ESP32_LCD
     #include "settings.h"
     #include "webconfig.h"
@@ -113,6 +116,16 @@ unsigned long currentMillis = 0;      // stores the value of millis() in each it
 unsigned long PreviousStanceMillis = 0;
 unsigned long PreviousShowTimeMillis = 0;
 unsigned long ShowTime = 0;
+
+#ifdef USE_WAVESHARE_ESP32_S3_LCD
+    // IMU tilt tracking (QMI8658 on Waveshare S3 LCD board)
+    int imuAddress = -1;
+    bool imuAvailable = false;
+    bool imuTiltValid = false;
+    float imuTiltAngleDeg = 0.0f;
+    unsigned long PreviousTiltMillis = 0;
+    const unsigned long TiltInterval = 100;
+#endif
 
 // Variables to check R2 state for transitions
 enum StanceState
@@ -183,6 +196,145 @@ int ScalePower(int power, int percent)
     #define DEBUG_PRINT(msg)
 #endif
 
+#ifdef USE_WAVESHARE_ESP32_S3_LCD
+bool ImuWriteReg(uint8_t reg, uint8_t value)
+{
+    if (imuAddress < 0)
+    {
+        return false;
+    }
+
+    Wire.beginTransmission((uint8_t)imuAddress);
+    Wire.write(reg);
+    Wire.write(value);
+    return (Wire.endTransmission() == 0);
+}
+
+bool ImuReadRegs(uint8_t reg, uint8_t* data, uint8_t len)
+{
+    if (imuAddress < 0)
+    {
+        return false;
+    }
+
+    for (uint8_t i = 0; i < len; i++)
+    {
+        Wire.beginTransmission((uint8_t)imuAddress);
+        Wire.write((uint8_t)(reg + i));
+        if (Wire.endTransmission(false) != 0)
+        {
+            return false;
+        }
+
+        uint8_t readLen = Wire.requestFrom((uint8_t)imuAddress, (uint8_t)1);
+        if (readLen != 1)
+        {
+            return false;
+        }
+        data[i] = Wire.read();
+    }
+    return true;
+}
+
+bool InitQmi8658()
+{
+    // Try both common I2C addresses used by QMI8658.
+    const uint8_t addresses[2] = { IMU_I2C_ADDR_PRIMARY, IMU_I2C_ADDR_SECONDARY };
+    for (uint8_t i = 0; i < 2; i++)
+    {
+        uint8_t whoAmI = 0;
+        imuAddress = addresses[i];
+        if (ImuReadRegs(0x00, &whoAmI, 1) && whoAmI == 0x05)
+        {
+            // CTRL2: ACC range/ODR, CTRL7: enable ACC and GYRO.
+            ImuWriteReg(0x03, 0x15); // 2g, 250Hz
+            ImuWriteReg(0x04, 0x35); // Gyro config (unused for tilt, keeps device in known mode)
+            ImuWriteReg(0x08, 0x03); // Enable ACC + GYRO
+            return true;
+        }
+    }
+
+    imuAddress = -1;
+    return false;
+}
+
+bool ReadQmi8658Tilt(float& tiltDegOut)
+{
+    uint8_t raw[6];
+    if (!ImuReadRegs(0x35, raw, sizeof(raw)))
+    {
+        return false;
+    }
+
+    int16_t axRaw = (int16_t)((raw[1] << 8) | raw[0]);
+    int16_t ayRaw = (int16_t)((raw[3] << 8) | raw[2]);
+    int16_t azRaw = (int16_t)((raw[5] << 8) | raw[4]);
+
+    // QMI8658 at +-2g is typically 16384 LSB/g.
+    float ax = (float)axRaw / 16384.0f;
+    float ay = (float)ayRaw / 16384.0f;
+    float az = (float)azRaw / 16384.0f;
+
+    float norm = sqrtf((ax * ax) + (ay * ay) + (az * az));
+    if (norm < 0.1f)
+    {
+        return false;
+    }
+
+    // Signed tilt angle from gravity, range about -180..180 degrees.
+    // Choose axis in config.h (X/Z or Y/Z).
+    #if IMU_TILT_USE_X_AXIS
+        tiltDegOut = atan2f(ax, az) * (180.0f / PI);
+    #else
+        tiltDegOut = atan2f(ay, az) * (180.0f / PI);
+    #endif
+
+    #if IMU_TILT_INVERT
+        tiltDegOut = -tiltDegOut;
+    #endif
+
+    tiltDegOut += IMU_TILT_OFFSET_DEG;
+    while (tiltDegOut > 180.0f)
+    {
+        tiltDegOut -= 360.0f;
+    }
+    while (tiltDegOut <= -180.0f)
+    {
+        tiltDegOut += 360.0f;
+    }
+
+    return true;
+}
+
+void UpdateTiltFromImu()
+{
+    float sampleTilt = 0.0f;
+    if (!imuAvailable)
+    {
+        imuTiltValid = false;
+        return;
+    }
+
+    if (ReadQmi8658Tilt(sampleTilt))
+    {
+        // Low-pass filter for stable display.
+        if (imuTiltValid)
+        {
+            imuTiltAngleDeg = (0.8f * imuTiltAngleDeg) + (0.2f * sampleTilt);
+        }
+        else
+        {
+            imuTiltAngleDeg = sampleTilt;
+        }
+        imuTiltValid = true;
+    }
+    else
+    {
+        imuTiltValid = false;
+    }
+}
+#endif
+
 /*
     Setup
 
@@ -221,6 +373,22 @@ void setup()
 
     // Initialize the display
     display.begin();
+
+    #ifdef USE_WAVESHARE_ESP32_S3_LCD
+        Wire.begin(IMU_SDA_PIN, IMU_SCL_PIN);
+        Wire.setClock(400000);
+        imuAvailable = InitQmi8658();
+        imuTiltValid = false;
+        display.showTiltAngle(0.0f, imuAvailable);
+        if (imuAvailable)
+        {
+            DEBUG_PRINT_LN("QMI8658 IMU detected.");
+        }
+        else
+        {
+            DEBUG_PRINT_LN("QMI8658 IMU not detected.");
+        }
+    #endif
 
     // Load settings and start WiFi config server (ESP32 only)
     #ifdef USE_WAVESHARE_ESP32_LCD
@@ -366,6 +534,9 @@ void Display()
 {
     // Update the LCD display with current status
     display.showStatus(currentStance, stanceName);
+    #ifdef USE_WAVESHARE_ESP32_S3_LCD
+        display.showTiltAngle(imuTiltAngleDeg, imuTiltValid);
+    #endif
 
     // We only output this if DEBUG_VERBOSE mode is enabled.
     #ifdef DEBUG_VERBOSE
@@ -387,6 +558,17 @@ void Display()
         DEBUG_PRINT_LN(TiltMoving);
         DEBUG_PRINT("Show Time     : ");
         DEBUG_PRINT_LN(ShowTime);
+        #ifdef USE_WAVESHARE_ESP32_S3_LCD
+            DEBUG_PRINT("IMU Tilt      : ");
+            if (imuTiltValid)
+            {
+                DEBUG_PRINT_LN(imuTiltAngleDeg);
+            }
+            else
+            {
+                DEBUG_PRINT_LN("Invalid");
+            }
+        #endif
     #endif
 }
 
@@ -958,6 +1140,15 @@ void loop()
     // These are instant digitalRead() calls and should not be throttled.
     ReadRollingCodeTrigger(); // Only does something if ENABLE_ROLLING_CODE_TRIGGER is defined.
     ReadLimitSwitches();
+
+    #ifdef USE_WAVESHARE_ESP32_S3_LCD
+        if (currentMillis - PreviousTiltMillis >= TiltInterval)
+        {
+            PreviousTiltMillis = currentMillis;
+            UpdateTiltFromImu();
+            display.showTiltAngle(imuTiltAngleDeg, imuTiltValid);
+        }
+    #endif
 
     if (currentMillis - PreviousStanceMillis >= StanceInterval)
     {

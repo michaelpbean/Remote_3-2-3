@@ -13,6 +13,10 @@ extern bool TiltMoving;
 extern bool enableRollCodeTransitions;
 extern int LegUp, LegDn, TiltUp, TiltDn;
 extern int webMoveActive;
+#ifdef USE_WAVESHARE_ESP32_S3_LCD
+extern float imuTiltAngleDeg;
+extern bool imuTiltValid;
+#endif
 
 WebConfigServer::WebConfigServer(SettingsManager& settingsManager)
     : settingsMgr(settingsManager), server(80), pendingCommand(WEB_CMD_NONE)
@@ -120,6 +124,7 @@ void WebConfigServer::HandleRoot()
         "<tr><td>Stance:</td><td id='st-stance'>--</td></tr>"
         "<tr><td>Target:</td><td id='st-target'>--</td></tr>"
         "<tr><td>Remote Armed:</td><td id='st-armed'>--</td></tr>"
+        "<tr><td>Tilt Angle:</td><td id='st-tilt'>--</td></tr>"
         "<tr><td>Limit Switches:</td><td id='st-switches'>--</td></tr>"
         "<tr><td>Web Move:</td><td id='st-webmove'>--</td></tr>"
         "</table>"
@@ -159,6 +164,7 @@ void WebConfigServer::HandleRoot()
         "var tgt={0:'None',1:'Two Legs',2:'Three Legs'};"
         "document.getElementById('st-target').textContent=tgt[d.target]||'Stance '+d.target;"
         "document.getElementById('st-armed').textContent=d.armed?'YES':'No';"
+        "document.getElementById('st-tilt').textContent=d.tiltValid?(d.tiltDeg.toFixed(1)+' deg'):'--';"
         "var sw='';"
         "sw+='LegUp:'+(d.legUp?'<span class=sw-open>OPEN</span>':'<span class=sw-closed>CLOSED</span>');"
         "sw+=' LegDn:'+(d.legDn?'<span class=sw-open>OPEN</span>':'<span class=sw-closed>CLOSED</span>');"
@@ -263,6 +269,15 @@ void WebConfigServer::HandleStatus()
     json += TiltDn;
     json += ",\"webMove\":";
     json += webMoveActive;
+#ifdef USE_WAVESHARE_ESP32_S3_LCD
+    json += ",\"tiltDeg\":";
+    json += String(imuTiltAngleDeg, 1);
+    json += ",\"tiltValid\":";
+    json += imuTiltValid ? "true" : "false";
+#else
+    json += ",\"tiltDeg\":0";
+    json += ",\"tiltValid\":false";
+#endif
     json += "}";
 
     server.send(200, "application/json", json);

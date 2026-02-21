@@ -1,5 +1,6 @@
 #include "config.h"
 #include "display.h"
+#include <math.h>
 
 // Enum values for stance comparison (these match the main file's enum)
 #define TWO_LEG_STANCE 1
@@ -13,6 +14,8 @@ DisplayManager::DisplayManager()
         leds = new CRGB[NUM_LEDS];
         lcdText[0] = '\0';
         rollCodeEnabled = false;
+        lastTiltAngleDeg = 0.0f;
+        lastTiltValid = false;
     #else
         lcd = new Adafruit_RGBLCDShield();
     #endif
@@ -50,6 +53,7 @@ void DisplayManager::begin()
         setBacklightColor(BLUE);
         snprintf(lcdText, sizeof(lcdText), "Holme 3-2-3\nv1.0");
         setLCDText(lcdText);
+        drawTiltOverlay();
     #else
         lcd->begin(16, 2);
         lcd->setBacklight(BLUE);
@@ -73,6 +77,7 @@ void DisplayManager::setBacklightColor(int color)
             // Since the screen is cleared when we change the backlight color, we need to redraw the existing text and indicators.
             setLCDText(lcdText);
             drawRollCodeIndicator();
+            drawTiltOverlay();
         }
 
         CRGB ledColor = CRGB::Black;
@@ -213,6 +218,22 @@ void DisplayManager::showRollCodeEnabled(bool enabled)
     #endif
 }
 
+void DisplayManager::showTiltAngle(float angleDeg, bool valid)
+{
+    #ifdef USE_WAVESHARE_ESP32_LCD
+        if (valid == lastTiltValid && (!valid || fabsf(angleDeg - lastTiltAngleDeg) < 0.2f))
+        {
+            return;
+        }
+        lastTiltAngleDeg = angleDeg;
+        lastTiltValid = valid;
+        drawTiltOverlay();
+    #else
+        (void)angleDeg;
+        (void)valid;
+    #endif
+}
+
 #ifdef USE_WAVESHARE_ESP32_LCD
     void DisplayManager::setLCDText(const char* message)
     {
@@ -257,5 +278,27 @@ void DisplayManager::showRollCodeEnabled(bool enabled)
             // Draw circle in background color to hide it
             tft->fillCircle(cx, cy, radius, lastColor);
         }
+    }
+
+    void DisplayManager::drawTiltOverlay()
+    {
+        int x = 8;
+        int y = tft->height() - 28;
+        tft->setTextSize(2);
+        tft->setCursor(x, y + 2);
+
+        char tiltText[24];
+        if (lastTiltValid)
+        {
+            // Fixed-width string avoids leftover characters and reduces visible redraw artifacts.
+            snprintf(tiltText, sizeof(tiltText), "Tilt:%6.1f deg ", lastTiltAngleDeg);
+        }
+        else
+        {
+            snprintf(tiltText, sizeof(tiltText), "Tilt:  --.- deg ");
+        }
+        tft->print(tiltText);
+
+        tft->setTextSize(3);
     }
 #endif

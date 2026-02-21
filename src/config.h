@@ -104,6 +104,21 @@
     // RGB LED configuration for Waveshare ESP32-S3-LCD-1.9
     #define NUM_LEDS  2  // Two WS2812 LEDs on the back of the board
     #define RGB_PIN   15   // GPIO pin where the WS2812 RGB LEDs are connected
+
+    // QMI8658 IMU (Waveshare ESP32-S3-LCD-1.9)
+    #define IMU_SDA_PIN 47
+    #define IMU_SCL_PIN 48
+    #define IMU_I2C_ADDR_PRIMARY   0x6B
+    #define IMU_I2C_ADDR_SECONDARY 0x6A
+
+    // Signed tilt angle configuration:
+    // 1 = use X axis vs Z axis, 0 = use Y axis vs Z axis.
+    // Flip IMU_TILT_INVERT if sign is opposite of your expected direction.
+    #define IMU_TILT_USE_X_AXIS 1
+    #define IMU_TILT_INVERT 0
+    // Additive offset in degrees applied after signed angle calculation.
+    // Example: -90 makes a physical +90 read as 0.
+    #define IMU_TILT_OFFSET_DEG -90.0f
 #elif defined(USE_ARDUINO_PRO_MICRO)
     // Arduino Pro Micro pins
     #define TiltUpPin 6   //Limit switch input pin, Grounded when closed
