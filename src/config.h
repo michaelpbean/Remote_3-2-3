@@ -88,10 +88,10 @@
     #define TiltDnPin 2   //Limit switch input pin, Grounded when closed
     #define LegUpPin  5   //Limit switch input pin, Grounded when closed
     #define LegDnPin  6   //Limit switch input pin, Grounded when closed
-    #define ROLLING_CODE_BUTTON_A_PIN 16 // Used as a killswitch / activate button
-    #define ROLLING_CODE_BUTTON_B_PIN 17 // Transition between 2 and 3 legs.
-    #define ROLLING_CODE_BUTTON_C_PIN 18 // Transition between 3 and 2 legs.
-    #define ROLLING_CODE_BUTTON_D_PIN 21
+    #define ROLLING_CODE_BUTTON_A_PIN 16 // Connects to RX480e D3 Pin - Used as a killswitch / activate button
+    #define ROLLING_CODE_BUTTON_B_PIN 17 // Connects to RX480e D2 Pin - Transition between 2 and 3 legs.
+    #define ROLLING_CODE_BUTTON_C_PIN 18 // Connects to RX480e D1 Pin - Transition between 3 and 2 legs.
+    #define ROLLING_CODE_BUTTON_D_PIN 21 // Connects to RX480e D0 Pin - Unused, but read as input for future expansion
 
     // TFT display pin definitions for Waveshare ESP32-S3-LCD-1.9
     #define TFT_MOSI  13   // LCD_DIN
